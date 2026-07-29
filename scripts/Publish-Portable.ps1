@@ -276,6 +276,7 @@ function Test-ReleaseContent {
         "locales",
         "node",
         "runtime",
+        "LICENSE",
         "README.md",
         "THIRD-PARTY-NOTICES.md"
     )
@@ -415,6 +416,7 @@ Test-PublishInputs -Paths @(
     (Join-Path $repoRoot "windows\TVBox.Windows\Assets"),
     (Join-Path $repoRoot "windows\TVBox.Windows\ffmpeg"),
     (Join-Path $repoRoot "windows\TVBox.Windows\node"),
+    (Join-Path $repoRoot "LICENSE"),
     (Join-Path $repoRoot "README.md"),
     (Join-Path $repoRoot "THIRD-PARTY-NOTICES.md")
 )
@@ -577,6 +579,10 @@ $readme = Join-Path $repoRoot "README.md"
 if (Test-Path -LiteralPath $readme -PathType Leaf) {
     Copy-Item -LiteralPath $readme -Destination (Join-Path $publishDirectory "README.md") -Force
 }
+$license = Join-Path $repoRoot "LICENSE"
+if (Test-Path -LiteralPath $license -PathType Leaf) {
+    Copy-Item -LiteralPath $license -Destination (Join-Path $publishDirectory "LICENSE") -Force
+}
 $notices = Join-Path $repoRoot "THIRD-PARTY-NOTICES.md"
 if (Test-Path -LiteralPath $notices -PathType Leaf) {
     Copy-Item -LiteralPath $notices -Destination (Join-Path $publishDirectory "THIRD-PARTY-NOTICES.md") -Force
@@ -595,6 +601,7 @@ catch {
 
 $requiredFiles = @(
     "TVBox.exe",
+    "LICENSE",
     "README.md",
     "THIRD-PARTY-NOTICES.md",
     "assets\icons\icon.ico",

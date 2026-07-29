@@ -123,6 +123,7 @@ if (-not (Test-Path -LiteralPath $mainExecutable -PathType Leaf)) {
 Assert-AppHostContract -Path $mainExecutable
 
 @(
+    'LICENSE',
     'README.md',
     'THIRD-PARTY-NOTICES.md',
     'assets\icons\icon.ico',
@@ -260,6 +261,7 @@ $allowedRootItems = @(
     'locales',
     'node',
     'runtime',
+    'LICENSE',
     'README.md',
     'THIRD-PARTY-NOTICES.md'
 )

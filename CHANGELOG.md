@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- Added the GPL-3.0 project license and a README interface screenshot.
+- Included the project license in future portable and MSI release layouts.
+
 ## 1.0.3 - 2026-07-29
 
 ### Fixed

@@ -1,8 +1,14 @@
 # TVBox for Windows
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+
 TVBox for Windows 是 [FongMi/TV](https://github.com/FongMi/TV) 的 Windows 桌面移植项目。应用使用 WinUI 3 构建，以 Flyleaf 和 FFmpeg 负责音视频播放，并提供点播、直播、全局搜索、收藏、历史、字幕、弹幕、画中画与沉浸式全屏等桌面端能力。
 
 > 本项目不内置、不维护、也不分发任何影视源、直播源或账号。请只使用自己有权访问的配置和内容，并遵守所在地法律、内容授权条款与服务提供方规则。
+
+## 界面预览
+
+![TVBox for Windows 点播界面](https://raw.githubusercontent.com/blueberry2568/TVBox-Windows/main/docs/images/tvbox-vod.png)
 
 ## 主要功能
 
@@ -63,6 +69,7 @@ TVBox/
 |-- runtime/
 |   |-- host/fxr/
 |   `-- shared/
+|-- LICENSE
 |-- README.md
 `-- THIRD-PARTY-NOTICES.md
 ```
@@ -149,10 +156,13 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ```text
 .
 |-- windows/TVBox.Windows/       WinUI 3 应用源码
-|-- docs/development/        架构、行为规格与运行时约定
-|-- docs/RELEASE.md          发布清单
+|-- docs/
+|   |-- images/                  README 界面截图
+|   |-- development/             架构、行为规格与运行时约定
+|   `-- RELEASE.md               发布清单
 |-- installer/               WiX MSI 安装包工程
 |-- scripts/                 干净便携包脚本
+|-- LICENSE                  GNU GPL v3 项目许可证
 `-- THIRD-PARTY-NOTICES.md   第三方组件与来源说明
 ```
 
@@ -198,6 +208,6 @@ Issue 至少应包含：
 
 ## 版权与合规
 
-本项目仅提供客户端技术实现。内容地址、账号、播放权限和网络服务均由用户自行负责。内置 FFmpeg 为 LGPL-3.0-or-later 共享构建；FlyleafLib、Jint、AngleSharp、Windows App SDK、内置 Node.js 及其传递依赖分别遵守各自许可证。具体版本、来源、校验值和替换说明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 以及发布包内各组件旁的 `LICENSE.txt` / `SOURCE.txt`。
+TVBox for Windows 是 [FongMi/TV](https://github.com/FongMi/TV) 的衍生项目，项目源代码依照 [GNU General Public License v3.0](LICENSE) 发布。各贡献者与上游项目保留其相应代码的著作权。
 
-若仓库根目录尚未提供项目级 `LICENSE`，不代表源代码已经授予任意复制、修改或再分发许可。首次公开发布前应由项目维护者确认项目授权文本及第三方通知。
+本项目仅提供客户端技术实现。内容地址、账号、播放权限和网络服务均由用户自行负责。内置 FFmpeg、FlyleafLib、Jint、AngleSharp、Windows App SDK、Node.js 及其传递依赖仍分别遵守各自许可证。具体版本、来源和授权信息见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) 以及发布包内各组件旁的 `LICENSE.txt` / `SOURCE.txt`。

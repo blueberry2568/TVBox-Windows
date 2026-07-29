@@ -72,6 +72,7 @@ TVBox/
 |   |-- host/fxr/<version>/hostfxr.dll
 |   |-- shared/Microsoft.NETCore.App/<version>/
 |   `-- shared/Microsoft.WindowsDesktop.App/<version>/
+|-- LICENSE
 |-- README.md
 `-- THIRD-PARTY-NOTICES.md
 ```
