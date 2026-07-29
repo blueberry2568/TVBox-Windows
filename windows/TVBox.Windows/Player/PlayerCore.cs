@@ -9,7 +9,17 @@ namespace TVBoxForWindows.Player;
 public class PlayerCore : IDisposable
 {
     const string TAG = "PlayerCore";
-    const string MissingFFmpegMsg = "FFmpeg 未安装：请将 FFmpeg 动态库(avcodec 等 dll)放入程序目录或数据目录的 ffmpeg 子目录后重启应用";
+    const string MissingFFmpegMsg = "FFmpeg 解码库未就绪：安装内容可能不完整，请重新安装或完整解压 TVBox";
+    static readonly string[] RequiredFFmpegLibraries =
+    {
+        "avcodec-62.dll",
+        "avdevice-62.dll",
+        "avfilter-11.dll",
+        "avformat-62.dll",
+        "avutil-60.dll",
+        "swresample-6.dll",
+        "swscale-9.dll",
+    };
 
     /// <summary>供 FlyleafHost 绑定；引擎未就绪时为 null。</summary>
     public FlyleafLib.MediaPlayer.Player Fly { get; }
@@ -49,7 +59,11 @@ public class PlayerCore : IDisposable
         try
         {
             var dir = FindFFmpeg();
-            if (dir == null) { Core.Logger.E(TAG, "未找到 FFmpeg 目录（{BaseDir}/ffmpeg 或 {Root}/ffmpeg）"); return; }
+            if (dir == null)
+            {
+                Core.Logger.E(TAG, "未找到完整的 FFmpeg 8.1 动态库目录（程序 app/ffmpeg 或数据目录 ffmpeg）");
+                return;
+            }
             FlyleafLib.Engine.Start(new EngineConfig
             {
                 FFmpegPath = dir,
@@ -66,7 +80,12 @@ public class PlayerCore : IDisposable
     {
         foreach (var dir in new[] { Path.Combine(AppContext.BaseDirectory, "ffmpeg"), Path.Combine(AppPaths.Root ?? "", "ffmpeg") })
         {
-            try { if (Directory.Exists(dir) && Directory.GetFiles(dir, "avcodec*.dll").Length > 0) return dir; } catch { }
+            try
+            {
+                if (Directory.Exists(dir) && RequiredFFmpegLibraries.All(name => File.Exists(Path.Combine(dir, name))))
+                    return dir;
+            }
+            catch { }
         }
         return null;
     }

@@ -3,8 +3,8 @@ param(
     [ValidateSet("x64")]
     [string]$Architecture = "x64",
 
-    [ValidatePattern("^[0-9A-Za-z][0-9A-Za-z._-]*$")]
-    [string]$Version = "1.0.1",
+    [ValidatePattern("^\d+\.\d+\.\d+$")]
+    [string]$Version = "1.0.2",
 
     [string]$OutputRoot = "",
 
@@ -60,6 +60,14 @@ function Assert-RequiredFile {
 function Test-ReleaseContent {
     param([Parameter(Mandatory = $true)][string]$Root)
 
+    $allowedRootItems = @("app", "TVBox.exe", "README.md", "THIRD-PARTY-NOTICES.md")
+    $unexpectedRootItems = Get-ChildItem -LiteralPath $Root -Force | Where-Object {
+        $allowedRootItems -notcontains $_.Name
+    }
+    if ($unexpectedRootItems) {
+        throw "发布目录顶层包含未归类项目: $($unexpectedRootItems.Name -join ', ')"
+    }
+
     $forbiddenNames = @(
         "prefs.json",
         "configs.json",
@@ -78,9 +86,15 @@ function Test-ReleaseContent {
         throw "发布输出包含用户数据或本地源文件:`n$($relative -join "`n")"
     }
 
-    $badDirectories = Get-ChildItem -LiteralPath $Root -Directory | Where-Object {
-        $forbiddenRootDirectories -contains $_.Name.ToLowerInvariant()
-    }
+    $runtimeRoot = Join-Path $Root "app"
+    $badDirectories = @(
+        Get-ChildItem -LiteralPath $Root -Directory | Where-Object {
+            $forbiddenRootDirectories -contains $_.Name.ToLowerInvariant()
+        }
+        Get-ChildItem -LiteralPath $runtimeRoot -Directory | Where-Object {
+            $forbiddenRootDirectories -contains $_.Name.ToLowerInvariant()
+        }
+    )
     if ($badDirectories) {
         throw "发布输出包含运行时用户目录: $($badDirectories.Name -join ', ')"
     }
@@ -107,6 +121,47 @@ function Test-ReleaseContent {
     }
 }
 
+function Get-FrameworkCompiler {
+    $candidates = @(
+        (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+        (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+    )
+    $compiler = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $compiler) { throw "未找到 Windows .NET Framework C# 编译器，无法生成 TVBox 启动器。" }
+    return $compiler
+}
+
+function Build-Launcher {
+    param(
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [Parameter(Mandatory = $true)][string]$BuildDirectory,
+        [Parameter(Mandatory = $true)][string]$ProductVersion
+    )
+
+    $source = Join-Path $repoRoot "launcher\TVBoxLauncher.cs"
+    $icon = Join-Path $repoRoot "windows\TVBox.Windows\Assets\icon.ico"
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "找不到启动器源码: $source" }
+    if (-not (Test-Path -LiteralPath $icon -PathType Leaf)) { throw "找不到启动器图标: $icon" }
+
+    New-Item -ItemType Directory -Path $BuildDirectory -Force | Out-Null
+    $assemblyInfo = Join-Path $BuildDirectory "LauncherAssemblyInfo.cs"
+    $attributes = @"
+using System.Reflection;
+[assembly: AssemblyTitle("TVBox")]
+[assembly: AssemblyProduct("TVBox for Windows")]
+[assembly: AssemblyCompany("TVBox Windows contributors")]
+[assembly: AssemblyDescription("TVBox for Windows launcher")]
+[assembly: AssemblyVersion("$ProductVersion.0")]
+[assembly: AssemblyFileVersion("$ProductVersion.0")]
+"@
+    [System.IO.File]::WriteAllText($assemblyInfo, $attributes, [System.Text.UTF8Encoding]::new($false))
+
+    $compiler = Get-FrameworkCompiler
+    & $compiler /nologo /target:winexe /optimize+ /platform:x64 `
+        "/win32icon:$icon" "/out:$Destination" $source $assemblyInfo
+    if ($LASTEXITCODE -ne 0) { throw "TVBox 启动器编译失败，退出代码: $LASTEXITCODE" }
+}
+
 $repoRoot = Get-FullPath (Join-Path $PSScriptRoot "..")
 $project = Join-Path $repoRoot "windows\TVBox.Windows\TVBox.Windows.csproj"
 if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
@@ -129,11 +184,14 @@ $platform = "x64"
 $rid = "win-x64"
 $packageName = "TVBox-$Architecture-$Version"
 $publishDirectory = Assert-ChildPath -Path (Join-Path $output $packageName) -Parent $output
+$appDirectory = Assert-ChildPath -Path (Join-Path $publishDirectory "app") -Parent $publishDirectory
+$launcherBuildDirectory = Assert-ChildPath -Path (Join-Path $output ".launcher-$Version") -Parent $output
 $zipPath = Assert-ChildPath -Path (Join-Path $output "$packageName.zip") -Parent $output
 
 Remove-OutputItem -Path $publishDirectory -Parent $output
+Remove-OutputItem -Path $launcherBuildDirectory -Parent $output
 Remove-OutputItem -Path $zipPath -Parent $output
-New-Item -ItemType Directory -Force -Path $publishDirectory | Out-Null
+New-Item -ItemType Directory -Force -Path $appDirectory | Out-Null
 
 $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
 if (-not $dotnet) { throw "未找到 dotnet。请安装 .NET 9 SDK。" }
@@ -149,7 +207,7 @@ try {
         -warnaserror `
         -p:DebugSymbols=false `
         -p:DebugType=None `
-        -o $publishDirectory
+        -o $appDirectory
     if ($LASTEXITCODE -ne 0) {
         throw "dotnet publish 失败，退出代码: $LASTEXITCODE"
     }
@@ -158,31 +216,48 @@ finally {
     Pop-Location
 }
 
-$requiredFiles = @(
-    "TVBox.exe",
-    "TVBox.dll",
-    "TVBox.deps.json",
-    "TVBox.runtimeconfig.json",
-    "THIRD-PARTY-NOTICES.md",
-    "Assets\node\node.exe",
-    "Assets\node\LICENSE.txt",
-    "Assets\node\SOURCE.txt",
-    "Assets\js\lib\cat.js",
-    "ffmpeg\avcodec-61.dll",
-    "ffmpeg\avformat-61.dll",
-    "ffmpeg\avutil-59.dll",
-    "ffmpeg\LICENSE.txt",
-    "ffmpeg\SOURCE.txt",
-    "ffmpeg\swresample-5.dll",
-    "ffmpeg\swscale-8.dll"
-)
-foreach ($relativePath in $requiredFiles) {
-    Assert-RequiredFile -Root $publishDirectory -RelativePath $relativePath
-}
+Build-Launcher `
+    -Destination (Join-Path $publishDirectory "TVBox.exe") `
+    -BuildDirectory $launcherBuildDirectory `
+    -ProductVersion $Version
+Remove-OutputItem -Path $launcherBuildDirectory -Parent $output
 
 $readme = Join-Path $repoRoot "README.md"
 if (Test-Path -LiteralPath $readme -PathType Leaf) {
     Copy-Item -LiteralPath $readme -Destination (Join-Path $publishDirectory "README.md") -Force
+}
+$notices = Join-Path $repoRoot "THIRD-PARTY-NOTICES.md"
+if (Test-Path -LiteralPath $notices -PathType Leaf) {
+    Copy-Item -LiteralPath $notices -Destination (Join-Path $publishDirectory "THIRD-PARTY-NOTICES.md") -Force
+}
+
+$requiredFiles = @(
+    "TVBox.exe",
+    "README.md",
+    "THIRD-PARTY-NOTICES.md",
+    "app\TVBox.exe",
+    "app\TVBox.dll",
+    "app\TVBox.deps.json",
+    "app\TVBox.runtimeconfig.json",
+    "app\THIRD-PARTY-NOTICES.md",
+    "app\Flyleaf.FFmpeg.Bindings.dll",
+    "app\Assets\icon.ico",
+    "app\Assets\node\node.exe",
+    "app\Assets\node\LICENSE.txt",
+    "app\Assets\node\SOURCE.txt",
+    "app\Assets\js\lib\cat.js",
+    "app\ffmpeg\avcodec-62.dll",
+    "app\ffmpeg\avdevice-62.dll",
+    "app\ffmpeg\avfilter-11.dll",
+    "app\ffmpeg\avformat-62.dll",
+    "app\ffmpeg\avutil-60.dll",
+    "app\ffmpeg\LICENSE.txt",
+    "app\ffmpeg\SOURCE.txt",
+    "app\ffmpeg\swresample-6.dll",
+    "app\ffmpeg\swscale-9.dll"
+)
+foreach ($relativePath in $requiredFiles) {
+    Assert-RequiredFile -Root $publishDirectory -RelativePath $relativePath
 }
 
 Test-ReleaseContent -Root $publishDirectory

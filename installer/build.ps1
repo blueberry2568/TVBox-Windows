@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string] $Version = '1.0.1',
+    [string] $Version = '1.0.2',
 
     [ValidateSet('Release')]
     [string] $Configuration = 'Release',
@@ -15,32 +15,17 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$appProject = Join-Path $repoRoot 'windows\TVBox.Windows\TVBox.Windows.csproj'
+$portableScript = Join-Path $repoRoot 'scripts\Publish-Portable.ps1'
 $installerProject = Join-Path $PSScriptRoot 'TVBox.Installer.wixproj'
 $artifactsRoot = Join-Path $repoRoot 'artifacts'
 if ([string]::IsNullOrWhiteSpace($PublishDirectory)) {
-    $publishDir = Join-Path $artifactsRoot 'publish\win-x64'
+    $publishDir = Join-Path $artifactsRoot "TVBox-x64-$Version"
 }
 elseif ([IO.Path]::IsPathRooted($PublishDirectory)) {
     $publishDir = [IO.Path]::GetFullPath($PublishDirectory)
 }
 else {
     $publishDir = [IO.Path]::GetFullPath((Join-Path $repoRoot $PublishDirectory))
-}
-
-function Reset-RepositoryDirectory {
-    param([Parameter(Mandatory)][string] $Path)
-
-    $fullPath = [IO.Path]::GetFullPath($Path)
-    $repoPrefix = $repoRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
-    if (-not $fullPath.StartsWith($repoPrefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Refusing to clear a directory outside the repository: $fullPath"
-    }
-
-    if (Test-Path -LiteralPath $fullPath) {
-        Remove-Item -LiteralPath $fullPath -Recurse -Force
-    }
-    New-Item -ItemType Directory -Path $fullPath -Force | Out-Null
 }
 
 function Invoke-DotNet {
@@ -77,20 +62,14 @@ function Get-ProductCode {
 }
 
 if (-not $SkipPublish) {
-    Reset-RepositoryDirectory -Path $publishDir
-
-    Invoke-DotNet -Arguments @(
-        'publish', $appProject,
-        '--configuration', $Configuration,
-        '--runtime', 'win-x64',
-        '--self-contained', 'true',
-        '--nologo',
-        '--warnaserror',
-        '-p:Platform=x64',
-        '-p:DebugSymbols=false',
-        '-p:DebugType=None',
-        "-p:PublishDir=$publishDir"
-    )
+    if (-not (Test-Path -LiteralPath $portableScript -PathType Leaf)) {
+        throw "Portable publish script is missing: $portableScript"
+    }
+    $expectedDirectoryName = "TVBox-x64-$Version"
+    if ([IO.Path]::GetFileName($publishDir.TrimEnd('\', '/')) -ne $expectedDirectoryName) {
+        throw "PublishDirectory must end with $expectedDirectoryName unless -SkipPublish is used."
+    }
+    & $portableScript -Architecture x64 -Version $Version -OutputRoot ([IO.Path]::GetDirectoryName($publishDir))
 }
 
 $mainExecutable = Join-Path $publishDir 'TVBox.exe'
@@ -99,21 +78,28 @@ if (-not (Test-Path -LiteralPath $mainExecutable -PathType Leaf)) {
 }
 
 @(
-    'TVBox.dll',
-    'TVBox.deps.json',
-    'TVBox.runtimeconfig.json',
+    'README.md',
     'THIRD-PARTY-NOTICES.md',
-    'Assets\node\node.exe',
-    'Assets\node\LICENSE.txt',
-    'Assets\node\SOURCE.txt',
-    'Assets\js\lib\cat.js',
-    'ffmpeg\avcodec-61.dll',
-    'ffmpeg\avformat-61.dll',
-    'ffmpeg\avutil-59.dll',
-    'ffmpeg\LICENSE.txt',
-    'ffmpeg\SOURCE.txt',
-    'ffmpeg\swresample-5.dll',
-    'ffmpeg\swscale-8.dll'
+    'app\TVBox.exe',
+    'app\TVBox.dll',
+    'app\TVBox.deps.json',
+    'app\TVBox.runtimeconfig.json',
+    'app\THIRD-PARTY-NOTICES.md',
+    'app\Flyleaf.FFmpeg.Bindings.dll',
+    'app\Assets\icon.ico',
+    'app\Assets\node\node.exe',
+    'app\Assets\node\LICENSE.txt',
+    'app\Assets\node\SOURCE.txt',
+    'app\Assets\js\lib\cat.js',
+    'app\ffmpeg\avcodec-62.dll',
+    'app\ffmpeg\avdevice-62.dll',
+    'app\ffmpeg\avfilter-11.dll',
+    'app\ffmpeg\avformat-62.dll',
+    'app\ffmpeg\avutil-60.dll',
+    'app\ffmpeg\LICENSE.txt',
+    'app\ffmpeg\SOURCE.txt',
+    'app\ffmpeg\swresample-6.dll',
+    'app\ffmpeg\swscale-9.dll'
 ) | ForEach-Object {
     $requiredPath = Join-Path $publishDir $_
     if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
@@ -122,6 +108,16 @@ if (-not (Test-Path -LiteralPath $mainExecutable -PathType Leaf)) {
 }
 
 # Release packages must never contain machine-local preferences or test data.
+$allowedRootItems = @('app', 'TVBox.exe', 'README.md', 'THIRD-PARTY-NOTICES.md')
+$unexpectedRootItems = @(
+    Get-ChildItem -LiteralPath $publishDir -Force | Where-Object {
+        $allowedRootItems -notcontains $_.Name
+    }
+)
+if ($unexpectedRootItems.Count -gt 0) {
+    throw "Release root contains unclassified items: $($unexpectedRootItems.Name -join ', ')"
+}
+
 $blockedNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 @(
     'prefs.json',
@@ -157,8 +153,12 @@ if ($blockedFiles.Count -gt 0) {
 }
 
 $blockedRootDirectories = @('cache', 'js', 'live', 'wall', 'restore', 'local', 'node')
+$runtimeRoot = Join-Path $publishDir 'app'
 $unexpectedDirectories = @(
     Get-ChildItem -LiteralPath $publishDir -Directory | Where-Object {
+        $blockedRootDirectories -contains $_.Name.ToLowerInvariant()
+    }
+    Get-ChildItem -LiteralPath $runtimeRoot -Directory | Where-Object {
         $blockedRootDirectories -contains $_.Name.ToLowerInvariant()
     }
 )

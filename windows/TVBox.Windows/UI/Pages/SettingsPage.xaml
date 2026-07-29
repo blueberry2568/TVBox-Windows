@@ -456,7 +456,7 @@
                         <TextBlock x:Name="FfmpegStatusText" Text="FFmpeg 状态检测中..."/>
                         <StackPanel x:Name="FfmpegGuidePanel" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource RowDesc}"
-                                       Text="未检测到 FFmpeg 解码库，无法播放。请下载 FFmpeg 7.x 的 shared win64 版本（BtbN/FFmpeg-Builds 或 gyan.dev 的 *-shared 包），将其 bin 目录下的全部 dll 复制到应用目录的 ffmpeg 文件夹内，然后重启应用。"/>
+                                       Text="未检测到兼容的 FFmpeg 解码库，无法播放。正式发布包已经内置 FFmpeg 8.1 LGPL shared win64 动态库；出现此提示通常表示安装或解压不完整，请重新下载安装包或完整解压便携包。"/>
                         </StackPanel>
                     </StackPanel>
                     <Button x:Name="OpenFfmpegButton" Grid.Column="1" Content="打开 FFmpeg 目录" Style="{StaticResource RightButton}" VerticalAlignment="Top" Click="OnOpenFfmpeg"/>

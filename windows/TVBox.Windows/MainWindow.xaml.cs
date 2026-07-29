@@ -24,6 +24,8 @@ public sealed partial class MainWindow : Window
     bool _paneOpenBeforeImmersive;
     bool _navigationPaneOpen;
     bool _closed;
+    bool _sourceSetupRequired;
+    bool _sourceSetupLoading;
     string _activeSection = "vod";
     string _loadedVodConfigUrl;
 
@@ -36,8 +38,14 @@ public sealed partial class MainWindow : Window
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(DragRegion);
-        // 设置任务栏 / Alt-Tab 图标
-        AppWindow.SetIcon(System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "icon.ico"));
+        // 设置任务栏 / Alt-Tab 图标。
+        var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "icon.ico");
+        try
+        {
+            if (!System.IO.File.Exists(iconPath)) throw new System.IO.FileNotFoundException("图标文件不存在", iconPath);
+            AppWindow.SetIcon(iconPath);
+        }
+        catch (Exception e) { Logger.E("WindowIcon", e.Message); }
         // The old key was also written by transient NavigationView template events,
         // so it can say "open" even when the user selected collapsed. Only the
         // settings page writes this new authoritative preference.
@@ -217,6 +225,7 @@ public sealed partial class MainWindow : Window
 
     void Startup()
     {
+        ActivateSection("vod", VodFrame, typeof(VodPage));
         if (string.IsNullOrEmpty(Setting.ConfigVod)) ShowWelcome(null);
         else _ = LoadLatestAsync();
     }
@@ -239,6 +248,7 @@ public sealed partial class MainWindow : Window
             SetLoading(true);
             LoadErrorBar.IsOpen = false;
             await VodConfigService.Instance.LoadAsync(config);
+            if (_sourceSetupRequired) CompleteSourceSetup();
         }
         catch (Exception e) { if (!_closed) ShowWelcome(e.Message); }
         finally { if (!_closed) SetLoading(false); }
@@ -246,26 +256,34 @@ public sealed partial class MainWindow : Window
 
     void ShowWelcome(string error)
     {
+        _sourceSetupRequired = true;
         WelcomePanel.Visibility = Visibility.Visible;
+        Nav.IsEnabled = false;
+        GlobalSearch.IsEnabled = false;
         if (string.IsNullOrEmpty(ConfigUrlBox.Text)) ConfigUrlBox.Text = Setting.ConfigVod ?? "";
+        if (string.IsNullOrEmpty(InitialLiveUrlBox.Text)) InitialLiveUrlBox.Text = Setting.ConfigLive ?? "";
         if (!string.IsNullOrEmpty(error))
         {
             LoadErrorBar.Message = error;
             LoadErrorBar.IsOpen = true;
         }
+        DispatcherQueue.TryEnqueue(() => ConfigUrlBox.Focus(FocusState.Programmatic));
     }
 
     void SetLoading(bool loading)
     {
+        _sourceSetupLoading = loading;
         LoadRing.IsActive = loading;
         LoadConfigButton.IsEnabled = !loading;
+        ConfigUrlBox.IsEnabled = !loading;
+        InitialLiveUrlBox.IsEnabled = !loading;
     }
 
     void OnLoadConfig(object sender, RoutedEventArgs e)
     {
         var url = (ConfigUrlBox.Text ?? "").Trim();
-        if (url.Length == 0) { ShowWelcome("请输入配置地址"); return; }
-        _ = LoadConfigAsync(Stores.FindConfig(url, 0));
+        if (url.Length == 0) { ShowWelcome("请输入点播配置地址"); return; }
+        _ = LoadInitialSourcesAsync(url, (InitialLiveUrlBox.Text ?? "").Trim());
     }
 
     void OnConfigUrlKeyDown(object sender, Microsoft.UI.Xaml.Input.KeyRoutedEventArgs e)
@@ -273,12 +291,55 @@ public sealed partial class MainWindow : Window
         if (e.Key == Windows.System.VirtualKey.Enter) OnLoadConfig(sender, null);
     }
 
+    async Task LoadInitialSourcesAsync(string vodUrl, string liveUrl)
+    {
+        if (_sourceSetupLoading) return;
+        try
+        {
+            SetLoading(true);
+            LoadErrorBar.IsOpen = false;
+            await VodConfigService.Instance.LoadAsync(Stores.FindConfig(vodUrl, 0));
+
+            string liveError = null;
+            if (!string.IsNullOrWhiteSpace(liveUrl))
+            {
+                try { await LiveConfigService.Instance.LoadAsync(Stores.FindConfig(liveUrl, 1)); }
+                catch (Exception e) { liveError = e.Message; }
+            }
+
+            CompleteSourceSetup();
+            if (!string.IsNullOrEmpty(liveError))
+            {
+                NoticeBar.Title = "直播源加载失败";
+                NoticeBar.Message = "点播源已加载，可以正常使用。直播源错误：" + liveError;
+                NoticeBar.Severity = InfoBarSeverity.Warning;
+                NoticeBar.IsOpen = true;
+            }
+        }
+        catch (Exception e)
+        {
+            if (!_closed) ShowWelcome(e.Message);
+        }
+        finally
+        {
+            if (!_closed) SetLoading(false);
+        }
+    }
+
+    void CompleteSourceSetup()
+    {
+        _sourceSetupRequired = false;
+        WelcomePanel.Visibility = Visibility.Collapsed;
+        LoadErrorBar.IsOpen = false;
+        Nav.IsEnabled = true;
+        GlobalSearch.IsEnabled = true;
+    }
+
     /// <summary>配置加载成功（UI 线程）：进入点播页并显示公告。</summary>
     void OnConfigLoaded()
     {
         if (_closed) return;
-        WelcomePanel.Visibility = Visibility.Collapsed;
-        LoadErrorBar.IsOpen = false;
+        if (_sourceSetupRequired && !_sourceSetupLoading) CompleteSourceSetup();
         var config = VodConfigService.Instance.Config;
         var loadedUrl = config?.Url ?? Setting.ConfigVod ?? "";
         var firstLoad = _loadedVodConfigUrl == null;
@@ -294,7 +355,9 @@ public sealed partial class MainWindow : Window
         var notice = config?.Notice;
         if (!string.IsNullOrEmpty(notice))
         {
+            NoticeBar.Title = "公告";
             NoticeBar.Message = notice;
+            NoticeBar.Severity = InfoBarSeverity.Informational;
             NoticeBar.IsOpen = true;
         }
     }
@@ -303,6 +366,7 @@ public sealed partial class MainWindow : Window
 
     void OnNavInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
     {
+        if (_sourceSetupRequired) return;
         if (args.IsSettingsInvoked)
         {
             ActivateSection("settings", SettingsFrame, typeof(SettingsPage));
@@ -374,6 +438,7 @@ public sealed partial class MainWindow : Window
     /// <summary>标题栏全局搜索 → SearchPage（带初始关键词）。</summary>
     void OnGlobalSearch(AutoSuggestBox sender, AutoSuggestBoxQuerySubmittedEventArgs args)
     {
+        if (_sourceSetupRequired) return;
         var keyword = (args.QueryText ?? "").Trim();
         if (keyword.Length == 0) return;
         ActivateSection("search", SearchFrame, typeof(SearchPage), keyword, navigate: true);

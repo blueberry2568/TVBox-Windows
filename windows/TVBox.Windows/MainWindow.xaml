@@ -101,37 +101,6 @@
                 <Frame x:Name="HistoryFrame" Visibility="Collapsed"/>
                 <Frame x:Name="SettingsFrame" Visibility="Collapsed"/>
 
-                <!-- 无配置时的欢迎/配置输入卡片 -->
-                <Grid x:Name="WelcomePanel" Visibility="Collapsed" Background="Transparent">
-                    <Border MaxWidth="520"
-                            Margin="24"
-                            Padding="32"
-                            HorizontalAlignment="Stretch"
-                            VerticalAlignment="Center"
-                            CornerRadius="8"
-                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                            BorderThickness="1">
-                        <StackPanel Spacing="16">
-                            <TextBlock Text="欢迎使用 TVBox" FontSize="28" FontWeight="SemiBold"/>
-                            <TextBlock Text="请输入点播配置地址开始使用（支持 http/https 链接）"
-                                       TextWrapping="Wrap"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                            <TextBox x:Name="ConfigUrlBox"
-                                     PlaceholderText="http(s)://... 配置地址"
-                                     KeyDown="OnConfigUrlKeyDown"/>
-                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                <Button x:Name="LoadConfigButton"
-                                        Content="加载配置"
-                                        Style="{StaticResource AccentButtonStyle}"
-                                        Click="OnLoadConfig"/>
-                                <ProgressRing x:Name="LoadRing" IsActive="False" Width="24" Height="24"/>
-                            </StackPanel>
-                            <InfoBar x:Name="LoadErrorBar" IsOpen="False" Severity="Error" Title="加载失败"/>
-                        </StackPanel>
-                    </Border>
-                </Grid>
-
                 <!-- 配置公告 -->
                 <InfoBar x:Name="NoticeBar"
                          VerticalAlignment="Top"
@@ -142,5 +111,60 @@
                          Title="公告"/>
             </Grid>
         </NavigationView>
+
+        <!-- 首次启动源配置：点播加载成功前覆盖并锁定整个应用界面。 -->
+        <Grid x:Name="WelcomePanel"
+              Grid.RowSpan="2"
+              Visibility="Collapsed"
+              Background="{ThemeResource SmokeFillColorDefaultBrush}"
+              Canvas.ZIndex="1000">
+            <Border MaxWidth="600"
+                    Margin="24"
+                    Padding="32"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Center"
+                    CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel Spacing="16">
+                    <TextBlock Text="添加初始源" FontSize="28" FontWeight="SemiBold"/>
+                    <TextBlock Text="点播配置为必填，直播配置可以稍后添加。"
+                               TextWrapping="Wrap"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="点播配置" FontWeight="SemiBold"/>
+                        <TextBox x:Name="ConfigUrlBox"
+                                 PlaceholderText="http(s)://... 点播配置地址"
+                                 KeyDown="OnConfigUrlKeyDown"/>
+                    </StackPanel>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="直播配置（可选）" FontWeight="SemiBold"/>
+                        <TextBox x:Name="InitialLiveUrlBox"
+                                 PlaceholderText="TXT / M3U / JSON / TVBox / CatPawOpen 地址"
+                                 KeyDown="OnConfigUrlKeyDown"/>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button x:Name="LoadConfigButton"
+                                Content="加载并开始"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Click="OnLoadConfig"/>
+                        <ProgressRing x:Name="LoadRing"
+                                      IsActive="False"
+                                      Width="24"
+                                      Height="24"
+                                      VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <InfoBar x:Name="LoadErrorBar"
+                             IsOpen="False"
+                             IsClosable="False"
+                             Severity="Error"
+                             Title="加载失败"/>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2 - 2026-07-29
+
+### Fixed
+
+- Added a blocking first-run source setup with required VOD and optional live configuration.
+- Reorganized portable and installed files around a visible root launcher and an `app` runtime directory.
+- Upgraded to matching Flyleaf FFmpeg bindings and LGPL FFmpeg 8.1 libraries so bundled playback libraries load correctly.
+- Added a stable taskbar identity, explicit shortcut icon, and a selectable MSI installation directory.
+
 ## 1.0.1 - 2026-07-29
 
 ### Fixed

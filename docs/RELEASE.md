@@ -37,15 +37,15 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ## 3. 生成便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.1
+.\scripts\Publish-Portable.ps1 -Version 1.0.2
 ```
 
 默认输出：
 
 ```text
 artifacts/
-|-- TVBox-x64-1.0.1/
-|-- TVBox-x64-1.0.1.zip
+|-- TVBox-x64-1.0.2/
+|-- TVBox-x64-1.0.2.zip
 `-- SHA256SUMS.txt
 ```
 
@@ -53,7 +53,7 @@ artifacts/
 
 - 使用 Release、自包含 Windows App SDK 和明确的 RID 发布。
 - 禁止包中出现常见用户数据文件和运行时缓存目录。
-- 校验 `TVBox.exe`、`.deps.json`、`.runtimeconfig.json`、`Assets/node/node.exe`、JS 运行库和关键 FFmpeg DLL。
+- 校验根目录启动器、`app/TVBox.exe`、`.deps.json`、`.runtimeconfig.json`、`app/Assets/node/node.exe`、JS 运行库和关键 FFmpeg DLL。
 - 扫描文本文件中的本机用户路径、带凭据 URL、私钥和常见 GitHub Token。
 - 复制公开 README，创建 ZIP 并写入 SHA-256。
 
@@ -64,14 +64,14 @@ artifacts/
 安装器应只从同一版本的干净便携目录取文件，不得从 `bin/`、`obj/`、旧 `windows/publish/` 或用户运行目录取文件。
 
 ```powershell
-.\installer\build.ps1 -Version 1.0.1
+.\installer\build.ps1 -Version 1.0.2
 ```
 
-安装包输出为 `artifacts\TVBox-Setup-x64-1.0.1.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
+安装包输出为 `artifacts\TVBox-Setup-x64-1.0.2.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
 
 至少确认：
 
-- 安装路径和开始菜单名称使用 `TVBox`。
+- 安装向导可以修改安装路径，开始菜单名称使用 `TVBox`。
 - 升级前能关闭正在运行的 `TVBox.exe`，或明确提示用户退出。
 - 卸载程序默认不要静默删除 `%LOCALAPPDATA%\TVBox for Windows`，避免误删用户收藏和历史；如提供清理选项，必须显式说明且由用户选择。
 - 安装器架构必须标记为 x64，不得误标为 ARM64。
@@ -105,11 +105,11 @@ Release 说明中不要粘贴私人订阅或带鉴权的复现地址。若没有
 安装并配置好 GitHub CLI 后可使用类似命令发布；实际仓库、标签和文件名以当前版本为准：
 
 ```powershell
-git tag -a v1.0.1 -m 'TVBox for Windows v1.0.1'
-git push origin v1.0.1
-gh release create v1.0.1 .\artifacts\TVBox-x64-1.0.1.zip `
-  .\artifacts\TVBox-Setup-x64-1.0.1.msi `
-  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.1'
+git tag -a v1.0.2 -m 'TVBox for Windows v1.0.2'
+git push origin v1.0.2
+gh release create v1.0.2 .\artifacts\TVBox-x64-1.0.2.zip `
+  .\artifacts\TVBox-Setup-x64-1.0.2.msi `
+  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.2'
 ```
 
 先创建草稿 Release 并人工核对附件、哈希和说明，再公开发布。

@@ -31,20 +31,21 @@ TVBox for Windows 是 [FongMi/TV](https://github.com/FongMi/TV) 的 Windows 桌�
 
 ### 安装包
 
-下载 x64 安装程序，核对 Release 页面给出的 SHA-256 后运行。若安装程序尚未进行代码签名，Windows SmartScreen 可能显示未知发布者；请先确认文件确实来自本项目 Release，再决定是否继续。
+下载 x64 安装程序，核对 Release 页面给出的 SHA-256 后运行。安装向导可以选择安装目录。若安装程序尚未进行代码签名，Windows SmartScreen 可能显示未知发布者；请先确认文件确实来自本项目 Release，再决定是否继续。
 
 ### 便携包
 
 1. 下载 x64 便携 ZIP。
 2. 完整解压到可写目录，不要直接在压缩包内运行。
 3. 运行 `TVBox.exe`。
-4. 更新时先退出 TVBox，再用新版本替换程序目录。
+4. 不要单独移动根目录的 `TVBox.exe`；实际程序和运行库统一位于旁边的 `app` 文件夹。
+5. 更新时先退出 TVBox，再用新版本替换整个程序目录。
 
 程序数据不写入便携包目录，因此替换程序文件不会自动删除收藏、历史或配置。数据位置见“隐私与本地数据”。
 
 ## 添加配置
 
-首次运行后打开“设置”，填写自己合法持有的点播或直播配置地址。地址提交后应用会加载站点或频道；配置中心在外部浏览器修改并发出刷新通知时，应用也会重新加载当前配置。
+首次运行且尚未添加点播源时，应用会显示不可跳过的初始源配置：点播配置必填，直播配置可选。点播源加载成功后导航才会解锁；后续可在“设置”中添加、切换或重载配置。配置中心在外部浏览器修改并发出刷新通知时，应用也会重新加载当前配置。
 
 点播配置中的直播列表可直接用于“直播”页面，也可以单独添加直播地址。源站返回 401、403、404、5xx、TLS 错误或超时通常表示远端服务、鉴权、网络或地区限制异常，不代表播放器一定存在故障。
 
@@ -108,10 +109,10 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ### 生成干净便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.1
+.\scripts\Publish-Portable.ps1 -Version 1.0.2
 ```
 
-输出位于 `artifacts/`，包括发布目录、ZIP 和 `SHA256SUMS.txt`。脚本会校验 `TVBox.exe`、内置 Node、FFmpeg DLL 等必要文件，并在发现用户数据、凭据 URL、私钥、GitHub Token 或本机用户路径时停止打包。
+输出位于 `artifacts/`，包括发布目录、ZIP 和 `SHA256SUMS.txt`。发布目录顶层仅保留启动器、README、第三方说明和 `app` 运行目录。脚本会校验根启动器、真实 WinUI 主程序、内置 Node、FFmpeg DLL 等必要文件，并在发现用户数据、凭据 URL、私钥、GitHub Token 或本机用户路径时停止打包。
 
 完整发布检查清单见 [docs/RELEASE.md](docs/RELEASE.md)。
 
@@ -120,6 +121,7 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ```text
 .
 |-- windows/TVBox.Windows/       WinUI 3 应用源码
+|-- launcher/                    便携包与安装目录的根启动器
 |-- docs/development/        架构、行为规格与运行时约定
 |-- docs/RELEASE.md          发布清单
 |-- installer/               WiX MSI 安装包工程

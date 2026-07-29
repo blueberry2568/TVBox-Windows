@@ -3,9 +3,10 @@
     <OutputType>Package</OutputType>
     <InstallerPlatform>x64</InstallerPlatform>
     <Platform>x64</Platform>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.1</ProductVersion>
-    <ProductCode Condition="'$(ProductCode)' == ''">EA194475-1DB0-5530-9B57-97A75926AF5F</ProductCode>
-    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish\win-x64</PublishDir>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.2</ProductVersion>
+    <ProductCode Condition="'$(ProductCode)' == ''">B7D7FA95-EF8D-55E1-A1C2-FF84B37FD5CB</ProductCode>
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\TVBox-x64-1.0.2</PublishDir>
+    <Cultures>zh-CN</Cultures>
     <OutputName>TVBox-Setup-x64-$(ProductVersion)</OutputName>
     <DefineConstants>$(DefineConstants);ProductVersion=$(ProductVersion);ProductCode=$(ProductCode);PublishDir=$(PublishDir)</DefineConstants>
     <SuppressPdbOutput>true</SuppressPdbOutput>
@@ -15,5 +16,6 @@
 
   <ItemGroup>
     <BindPath Include="$(PublishDir)" BindName="Publish" />
+    <PackageReference Include="WixToolset.UI.wixext" Version="6.0.2" />
   </ItemGroup>
 </Project>

@@ -9,8 +9,8 @@
 - Node 脚本缓存：`%LOCALAPPDATA%\TVBox for Windows\node\index.js`
 - JS 模块缓存：`%LOCALAPPDATA%\TVBox for Windows\js`
 - 本地文件：`%LOCALAPPDATA%\TVBox for Windows\local`
-- 内置 Node：`TVBox.Windows\Assets\node\node.exe`
-- FFmpeg：`TVBox.Windows\ffmpeg\*.dll`
+- 发布包内置 Node：`app\Assets\node\node.exe`
+- 发布包 FFmpeg：`app\ffmpeg\*.dll`
 - 应用本地服务：`http://127.0.0.1:9978` 起逐端口探测
 
 启动时会后台删除旧版本遗留的 `runtime`、`jar`、`py`、`pyenv` 目录。

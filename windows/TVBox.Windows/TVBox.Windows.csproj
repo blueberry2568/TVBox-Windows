@@ -9,9 +9,9 @@
     <Product>TVBox for Windows</Product>
     <Authors>TVBox Windows contributors</Authors>
     <Description>A native Windows TVBox client built with WinUI 3.</Description>
-    <Version>1.0.1</Version>
-    <AssemblyVersion>1.0.1.0</AssemblyVersion>
-    <FileVersion>1.0.1.0</FileVersion>
+    <Version>1.0.2</Version>
+    <AssemblyVersion>1.0.2.0</AssemblyVersion>
+    <FileVersion>1.0.2.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
@@ -33,6 +33,7 @@
     <PackageReference Include="Jint" Version="4.14.0" />
     <PackageReference Include="AngleSharp" Version="1.5.2" />
     <PackageReference Include="FlyleafLib" Version="3.10.4" />
+    <PackageReference Include="Flyleaf.FFmpeg.Bindings" Version="8.1.0" />
     <PackageReference Include="FlyleafLib.Controls.WinUI" Version="1.3.4" />
   </ItemGroup>
 

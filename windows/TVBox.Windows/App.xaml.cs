@@ -3,16 +3,23 @@ using Microsoft.UI.Xaml;
 using TVBoxForWindows.Core;
 using TVBoxForWindows.Player;
 using TVBoxForWindows.Server;
+using System.Runtime.InteropServices;
 
 namespace TVBoxForWindows;
 
 public partial class App : Application
 {
+    const string AppUserModelId = "TVBox.Windows";
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
+
     public static MainWindow Main { get; private set; }
     public static DispatcherQueue Dispatcher { get; private set; }
 
     public App()
     {
+        try { SetCurrentProcessExplicitAppUserModelID(AppUserModelId); } catch { }
         InitializeComponent();
         UnhandledException += (s, e) => { Logger.E("App", e.Exception?.ToString() ?? e.Message); e.Handled = true; };
     }
