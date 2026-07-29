@@ -4,7 +4,7 @@ param(
     [string]$Architecture = "x64",
 
     [ValidatePattern("^[0-9A-Za-z][0-9A-Za-z._-]*$")]
-    [string]$Version = "1.0.0",
+    [string]$Version = "1.0.1",
 
     [string]$OutputRoot = "",
 
@@ -108,7 +108,7 @@ function Test-ReleaseContent {
 }
 
 $repoRoot = Get-FullPath (Join-Path $PSScriptRoot "..")
-$project = Join-Path $repoRoot "windows\FongMi.TV\FongMi.TV.csproj"
+$project = Join-Path $repoRoot "windows\TVBox.Windows\TVBox.Windows.csproj"
 if (-not (Test-Path -LiteralPath $project -PathType Leaf)) {
     throw "找不到项目文件: $project"
 }
@@ -196,8 +196,9 @@ $checksumLine = "$($hash.Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileNa
 $existing = @()
 if (Test-Path -LiteralPath $checksumPath) {
     $zipName = [System.IO.Path]::GetFileName($zipPath)
+    $currentVersionPattern = "  TVBox-(?:Setup-)?x64-$([regex]::Escape($Version))\.(?:zip|msi)$"
     $existing = Get-Content -LiteralPath $checksumPath | Where-Object {
-        $_ -notmatch ("  " + [regex]::Escape($zipName) + "$")
+        $_ -match $currentVersionPattern -and $_ -notmatch ("  " + [regex]::Escape($zipName) + "$")
     }
 }
 @($existing) + $checksumLine | Set-Content -LiteralPath $checksumPath -Encoding ASCII

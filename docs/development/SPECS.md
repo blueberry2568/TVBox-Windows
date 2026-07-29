@@ -5,7 +5,7 @@
 
 <!-- SECTION: Server -->
 
-# FongMi.TV 本地 HTTP 服务器协议规格（C# 移植用）
+# TVBox for Windows 本地 HTTP 服务器协议规格（C# 移植用）
 
 源码：`app/src/main/java/com/fongmi/android/tv/server/`（Nano.java, Server.java, process/*, impl/Process.java）、`docs/LOCAL.md`、`app/src/mobile/java/com/fongmi/android/tv/utils/ScanTask.java`、`catvod/.../com/github/catvod/Proxy.java`
 

@@ -68,7 +68,7 @@ Windows 版不支持依赖 Android/JVM 的 JAR Spider、Python Spider，以及 T
 运行数据保存在：
 
 ```text
-%LOCALAPPDATA%\FongMi.TV
+%LOCALAPPDATA%\TVBox for Windows
 ```
 
 常见文件包括：
@@ -82,7 +82,7 @@ Windows 版不支持依赖 Android/JVM 的 JAR Spider、Python Spider，以及 T
 | `app.log` | 运行日志，可能包含请求地址和错误信息 |
 | `cache`、`js`、`node`、`live` 等 | 图片、脚本、订阅和直播缓存 |
 
-隐私模式用于停止新增播放历史，不会自动删除已有历史、收藏或配置。完全退出应用后删除整个 `%LOCALAPPDATA%\FongMi.TV` 目录可以恢复为全新状态；此操作不可撤销。
+隐私模式用于停止新增播放历史，不会自动删除已有历史、收藏或配置。完全退出应用后删除整个 `%LOCALAPPDATA%\TVBox for Windows` 目录可以恢复为全新状态；此操作不可撤销。
 
 发布脚本只打包项目编译输出，不会读取或复制该数据目录。提交问题前请检查并脱敏 `app.log`，至少移除私人订阅地址、用户名、密码、Cookie、Token 和请求头。
 
@@ -98,8 +98,8 @@ Windows 版不支持依赖 Android/JVM 的 JAR Spider、Python Spider，以及 T
 ### x64 严格构建
 
 ```powershell
-dotnet restore .\windows\FongMi.TV\FongMi.TV.csproj -r win-x64
-dotnet build .\windows\FongMi.TV\FongMi.TV.csproj `
+dotnet restore .\windows\TVBox.Windows\TVBox.Windows.csproj -r win-x64
+dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
   -c Release -p:Platform=x64 -r win-x64 --no-restore -warnaserror
 ```
 
@@ -108,7 +108,7 @@ dotnet build .\windows\FongMi.TV\FongMi.TV.csproj `
 ### 生成干净便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.0
+.\scripts\Publish-Portable.ps1 -Version 1.0.1
 ```
 
 输出位于 `artifacts/`，包括发布目录、ZIP 和 `SHA256SUMS.txt`。脚本会校验 `TVBox.exe`、内置 Node、FFmpeg DLL 等必要文件，并在发现用户数据、凭据 URL、私钥、GitHub Token 或本机用户路径时停止打包。
@@ -119,7 +119,7 @@ dotnet build .\windows\FongMi.TV\FongMi.TV.csproj `
 
 ```text
 .
-|-- windows/FongMi.TV/       WinUI 3 应用源码
+|-- windows/TVBox.Windows/       WinUI 3 应用源码
 |-- docs/development/        架构、行为规格与运行时约定
 |-- docs/RELEASE.md          发布清单
 |-- installer/               WiX MSI 安装包工程
@@ -153,7 +153,7 @@ dotnet build .\windows\FongMi.TV\FongMi.TV.csproj `
 
 ### 恢复全新状态
 
-退出应用，按需备份后删除 `%LOCALAPPDATA%\FongMi.TV`。重新启动后应用会创建空白数据目录，发布包本身不会带入开发者的配置、历史或收藏。
+退出应用，按需备份后删除 `%LOCALAPPDATA%\TVBox for Windows`。重新启动后应用会创建空白数据目录，发布包本身不会带入开发者的配置、历史或收藏。
 
 ## 反馈问题
 
@@ -163,7 +163,7 @@ Issue 至少应包含：
 - Windows 版本、缩放比例、CPU 与显卡型号
 - 可重复的操作步骤和期望/实际结果
 - 问题是否只发生于单个源、单条线路或特定编码
-- 已脱敏的 `%LOCALAPPDATA%\FongMi.TV\app.log`
+- 已脱敏的 `%LOCALAPPDATA%\TVBox for Windows\app.log`
 
 请勿公开提交受版权保护的媒体、私人订阅、账号、Cookie、Token 或 DRM 密钥。
 

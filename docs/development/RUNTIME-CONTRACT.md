@@ -1,16 +1,16 @@
-# FongMi.TV Windows 运行时契约
+# TVBox for Windows 运行时契约
 
 > 当前状态：Windows 版只保留 Node.js、JavaScript/Jint 和普通 HTTP/API 站点。
 > JAR/Python 侧车及其资源已移除；旧版相关文档、目录和运行时不得重新接回构建。
 
 ## 1. 运行时目录
 
-- 应用数据：`%LOCALAPPDATA%\FongMi.TV`
-- Node 脚本缓存：`%LOCALAPPDATA%\FongMi.TV\node\index.js`
-- JS 模块缓存：`%LOCALAPPDATA%\FongMi.TV\js`
-- 本地文件：`%LOCALAPPDATA%\FongMi.TV\local`
-- 内置 Node：`FongMi.TV\Assets\node\node.exe`
-- FFmpeg：`FongMi.TV\ffmpeg\*.dll`
+- 应用数据：`%LOCALAPPDATA%\TVBox for Windows`
+- Node 脚本缓存：`%LOCALAPPDATA%\TVBox for Windows\node\index.js`
+- JS 模块缓存：`%LOCALAPPDATA%\TVBox for Windows\js`
+- 本地文件：`%LOCALAPPDATA%\TVBox for Windows\local`
+- 内置 Node：`TVBox.Windows\Assets\node\node.exe`
+- FFmpeg：`TVBox.Windows\ffmpeg\*.dll`
 - 应用本地服务：`http://127.0.0.1:9978` 起逐端口探测
 
 启动时会后台删除旧版本遗留的 `runtime`、`jar`、`py`、`pyenv` 目录。

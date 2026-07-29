@@ -1,0 +1,55 @@
+<Page
+    x:Class="TVBoxForWindows.UI.Pages.KeepPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:TVBoxForWindows.UI.Controls"
+    NavigationCacheMode="Enabled">
+
+    <Page.Resources>
+        <DataTemplate x:Key="KeepTemplate">
+            <StackPanel Margin="6" Width="150">
+                <StackPanel.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="取消收藏" Click="OnRemove">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8D9;"/>
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </StackPanel.ContextFlyout>
+                <controls:PosterCard Pic="{Binding Pic}"
+                                     Title="{Binding Title}"
+                                     Remark="{Binding Remark}"/>
+            </StackPanel>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock Text="收藏" Style="{StaticResource PageTitleTextStyle}" VerticalAlignment="Center"/>
+            <TextBlock x:Name="CountText"
+                       VerticalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,8,0,0">
+            <GridView x:Name="KeepGrid"
+                      SelectionMode="None"
+                      IsItemClickEnabled="True"
+                      ItemClick="OnItemClick"
+                      ItemTemplate="{StaticResource KeepTemplate}"
+                      Padding="0,0,0,24"/>
+            <TextBlock x:Name="EmptyText"
+                       Text="暂无收藏"
+                       Visibility="Collapsed"
+                       HorizontalAlignment="Center"
+                       Margin="0,48,0,0"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Grid>
+    </Grid>
+</Page>

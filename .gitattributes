@@ -1,2 +1,2 @@
-windows/FongMi.TV/ffmpeg/*.dll filter=lfs diff=lfs merge=lfs -text
-windows/FongMi.TV/Assets/node/node.exe filter=lfs diff=lfs merge=lfs -text
+windows/TVBox.Windows/ffmpeg/*.dll filter=lfs diff=lfs merge=lfs -text
+windows/TVBox.Windows/Assets/node/node.exe filter=lfs diff=lfs merge=lfs -text

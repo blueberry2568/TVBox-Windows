@@ -1,4 +1,4 @@
-# FongMi.TV for Windows — 架构契约（所有模块开发者必读）
+# TVBox for Windows - 架构契约（所有模块开发者必读）
 
 本文件是多模块并行开发的唯一契约。**所有公共类名、命名空间、方法签名必须与本文一致**，
 否则集成编译会失败。已存在的文件（Core/Net/Models/Live/Engine 部分）不要重写，直接复用。
@@ -8,7 +8,7 @@
 - TargetFramework `net9.0-windows10.0.19041.0`，WindowsAppSDK **1.8**，WinUI3。
 - `Nullable` 关闭；`ImplicitUsings` 开启（System/Linq/IO/Collections.Generic/Threading.Tasks 无需 using）。
 - 注释使用中文，风格与现有文件一致（`///` 摘要注明"移植自 XXX.java"）。
-- 所有网络请求走 `FongMi.TV.Net.HttpUtil`（已实现 hosts/DoH/代理/广告拦截）。
+- 所有网络请求走 `TVBoxForWindows.Net.HttpUtil`（已实现 hosts/DoH/代理/广告拦截）。
 - JSON 一律用 `Models.ModelJson`（宽容解析）或 `Core.JsonUtil`；**不要**引入 Newtonsoft。
 - 日志 `Core.Logger.D/E(tag, msg)`。
 - UI 线程调度 `App.Post(Action)`。
@@ -43,7 +43,7 @@
 
 ### 2.1 `Engine/Spider.cs` — 抽象基类（移植 catvod Spider.java）
 ```csharp
-namespace FongMi.TV.Engine;
+namespace TVBoxForWindows.Engine;
 public abstract class Spider
 {
     public Models.Site Site { get; set; }
@@ -118,7 +118,7 @@ public class SearchService
 
 ### 3.1 `Server/LocalServer.cs`
 ```csharp
-namespace FongMi.TV.Server;
+namespace TVBoxForWindows.Server;
 public class LocalServer
 {
     public static LocalServer Instance { get; }
@@ -140,7 +140,7 @@ public class LocalServer
 
 ### 4.1 `Player/PlayerCore.cs`
 ```csharp
-namespace FongMi.TV.Player;
+namespace TVBoxForWindows.Player;
 public class PlayerCore : IDisposable
 {
     public FlyleafLib.MediaPlayer.Player Fly { get; }   // 供 FlyleafHost 绑定
@@ -203,7 +203,7 @@ public class DanmakuItem { public long TimeMs; public string Text; public int Mo
 外挂字幕（SRT/ASS/VTT）下载到本地缓存后交给 Flyleaf（`Fly.OpenAsync` 或 `Config.Subtitles`），
 供播放页「字幕」菜单使用：`public static Task<string> Fetch(Models.Sub sub)` 返回本地路径。
 
-## 5. UI 模块（新增，`UI/` 目录，命名空间 `FongMi.TV.UI`）
+## 5. UI 模块（新增，`UI/` 目录，命名空间 `TVBoxForWindows.UI`）
 
 ### 5.1 视觉规范（务必统一）
 - `MainWindow`：`SystemBackdrop = MicaBackdrop`，`ExtendsContentIntoTitleBar = true`，自绘标题栏含 logo + 全局搜索框 + 配置切换按钮。
@@ -230,7 +230,7 @@ public class DanmakuItem { public long TimeMs; public string Text; public int Mo
 
 ### 5.3 `UI/PlaySession.cs` — 播放会话（页面间传参与换源状态机）
 ```csharp
-namespace FongMi.TV.UI;
+namespace TVBoxForWindows.UI;
 public class PlaySession
 {
     public Models.Site Site; public Models.Vod Vod;

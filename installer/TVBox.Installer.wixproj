@@ -3,8 +3,8 @@
     <OutputType>Package</OutputType>
     <InstallerPlatform>x64</InstallerPlatform>
     <Platform>x64</Platform>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
-    <ProductCode Condition="'$(ProductCode)' == ''">9A897342-CC56-5CE3-8072-C93BB57272E1</ProductCode>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.1</ProductVersion>
+    <ProductCode Condition="'$(ProductCode)' == ''">EA194475-1DB0-5530-9B57-97A75926AF5F</ProductCode>
     <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\publish\win-x64</PublishDir>
     <OutputName>TVBox-Setup-x64-$(ProductVersion)</OutputName>
     <DefineConstants>$(DefineConstants);ProductVersion=$(ProductVersion);ProductCode=$(ProductCode);PublishDir=$(PublishDir)</DefineConstants>

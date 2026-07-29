@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string] $Version = '1.0.0',
+    [string] $Version = '1.0.1',
 
     [ValidateSet('Release')]
     [string] $Configuration = 'Release',
@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$appProject = Join-Path $repoRoot 'windows\FongMi.TV\FongMi.TV.csproj'
+$appProject = Join-Path $repoRoot 'windows\TVBox.Windows\TVBox.Windows.csproj'
 $installerProject = Join-Path $PSScriptRoot 'TVBox.Installer.wixproj'
 $artifactsRoot = Join-Path $repoRoot 'artifacts'
 if ([string]::IsNullOrWhiteSpace($PublishDirectory)) {
@@ -216,8 +216,9 @@ $checksumPath = Join-Path $artifactsRoot 'SHA256SUMS.txt'
 $checksumLine = "$($hash.Hash.ToLowerInvariant())  $($installerFile.Name)"
 $existingChecksums = @()
 if (Test-Path -LiteralPath $checksumPath -PathType Leaf) {
+    $currentVersionPattern = '  TVBox-(?:Setup-)?x64-' + [regex]::Escape($Version) + '\.(?:zip|msi)$'
     $existingChecksums = Get-Content -LiteralPath $checksumPath | Where-Object {
-        $_ -notmatch ('  ' + [regex]::Escape($installerFile.Name) + '$')
+        $_ -match $currentVersionPattern -and $_ -notmatch ('  ' + [regex]::Escape($installerFile.Name) + '$')
     }
 }
 @($existingChecksums) + $checksumLine | Set-Content -LiteralPath $checksumPath -Encoding ASCII

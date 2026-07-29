@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.1 - 2026-07-29
+
+### Fixed
+
+- Moved runtime data to `%LOCALAPPDATA%\TVBox for Windows` and completed the internal namespace rename.
+- Removed the MSI launch condition that incorrectly rejected supported Windows 11 systems.
+- Published distinct `1.0.1` package names so cached `1.0.0` installers cannot be mistaken for the corrected build.
+
 ## 1.0.0 - 2026-07-29
 
 ### Added

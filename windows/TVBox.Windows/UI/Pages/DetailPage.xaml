@@ -1,0 +1,168 @@
+<Page
+    x:Class="TVBoxForWindows.UI.Pages.DetailPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:TVBoxForWindows.UI.Controls">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部：返回 + 标题 -->
+        <StackPanel Orientation="Horizontal" Spacing="12" Padding="24,16,24,0">
+            <Button Click="OnBack" ToolTipService.ToolTip="返回">
+                <FontIcon Glyph="&#xE72B;" FontSize="14"/>
+            </Button>
+            <TextBlock x:Name="TitleText"
+                       Text="详情"
+                       Style="{StaticResource PageTitleTextStyle}"
+                       VerticalAlignment="Center"
+                       MaxWidth="640"
+                       TextTrimming="CharacterEllipsis"/>
+            <ProgressRing x:Name="Busy" IsActive="False" Width="24" Height="24" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1" Margin="0,8,0,0">
+            <StackPanel Padding="24,0,24,24" Spacing="12">
+                <InfoBar x:Name="MsgBar" IsOpen="False" Severity="Error" Title="提示"/>
+
+                <!-- Hero：模糊感海报背景（低透明度铺底）+ 海报 + 信息；MaxHeight 防止竖版海报撑满屏幕 -->
+                <Grid x:Name="HeroPanel" CornerRadius="8" Visibility="Collapsed" MaxHeight="320">
+                    <controls:PosterImage x:Name="Backdrop" Opacity="0.18"/>
+                    <!-- 深色遮罩渐变，保证前景文字可读 -->
+                    <Border>
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                <GradientStop Color="#22000000" Offset="0"/>
+                                <GradientStop Color="#00000000" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
+                    <Grid Padding="24" ColumnSpacing="24">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Width="160" Height="240" CornerRadius="8" VerticalAlignment="Top">
+                            <controls:PosterImage x:Name="Poster"/>
+                        </Border>
+                        <StackPanel Grid.Column="1" Spacing="8">
+                            <TextBlock x:Name="NameText" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="MetaText"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap"/>
+                            <TextBlock x:Name="DirectorText"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Visibility="Collapsed"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="ActorText"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Visibility="Collapsed"
+                                       MaxLines="2"
+                                       TextWrapping="Wrap"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <TextBlock x:Name="ContentText"
+                                       Visibility="Collapsed"
+                                       MaxLines="3"
+                                       TextWrapping="Wrap"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <HyperlinkButton x:Name="ExpandButton"
+                                             Content="展开"
+                                             Padding="0"
+                                             Visibility="Collapsed"
+                                             Click="OnToggleContent"/>
+                            <!-- 操作行 -->
+                            <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,8,0,0">
+                                <Button x:Name="PlayButton" Style="{StaticResource AccentButtonStyle}" Click="OnPlay">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE768;" FontSize="14"/>
+                                        <TextBlock x:Name="PlayText" Text="播放"/>
+                                    </StackPanel>
+                                </Button>
+                                <ToggleButton x:Name="KeepButton" Click="OnKeep" ToolTipService.ToolTip="收藏">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon x:Name="KeepIcon" Glyph="&#xE734;" FontSize="14"/>
+                                        <TextBlock x:Name="KeepText" Text="收藏"/>
+                                    </StackPanel>
+                                </ToggleButton>
+                                <Button Click="OnSearchOther" ToolTipService.ToolTip="用片名搜索其他站点">
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE721;" FontSize="14"/>
+                                        <TextBlock Text="换源搜索"/>
+                                    </StackPanel>
+                                </Button>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+
+                <!-- 线路 Tab -->
+                <StackPanel x:Name="FlagsPanel" Spacing="8" Visibility="Collapsed">
+                    <TextBlock Text="线路" Style="{StaticResource SectionTitleTextStyle}"/>
+                    <ListView x:Name="FlagList"
+                              Height="48"
+                              SelectionMode="Single"
+                              SelectionChanged="OnFlagChanged"
+                              ScrollViewer.HorizontalScrollMode="Enabled"
+                              ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                              ScrollViewer.VerticalScrollMode="Disabled"
+                              ScrollViewer.VerticalScrollBarVisibility="Disabled">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsStackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Flag}" FontSize="15" Margin="4,6"/>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <!-- 集数工具行：标题 + 总数 + 倒序 + 分段下拉（>200 集） -->
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <TextBlock Text="选集" Style="{StaticResource SectionTitleTextStyle}" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="CountText"
+                                   VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <ToggleButton x:Name="RevButton" Click="OnReverse" ToolTipService.ToolTip="集数倒序">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xE8CB;" FontSize="14"/>
+                                <TextBlock Text="倒序"/>
+                            </StackPanel>
+                        </ToggleButton>
+                        <ComboBox x:Name="SegmentCombo"
+                                  MinWidth="120"
+                                  Visibility="Collapsed"
+                                  SelectionChanged="OnSegmentChanged"
+                                  ToolTipService.ToolTip="集数分段"/>
+                    </StackPanel>
+
+                    <!-- 集数自适应流式布局 -->
+                    <GridView x:Name="EpisodeGrid"
+                              SelectionMode="None"
+                              IsItemClickEnabled="True"
+                              ItemClick="OnEpisodeClick"
+                              ScrollViewer.VerticalScrollMode="Disabled"
+                              ScrollViewer.VerticalScrollBarVisibility="Hidden">
+                        <GridView.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="{ThemeResource ControlCornerRadius}"
+                                        Padding="14,8">
+                                    <TextBlock Text="{Binding Name}"
+                                               MaxWidth="200"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </Border>
+                            </DataTemplate>
+                        </GridView.ItemTemplate>
+                    </GridView>
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</Page>

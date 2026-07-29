@@ -18,11 +18,6 @@
     <Property Id="ARPPRODUCTICON" Value="TVBoxIcon.ico" />
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
 
-    <!-- MSI reports Windows 10/11 as VersionNT64=603; WindowsBuild enforces 1809+. -->
-    <Launch
-      Condition="Installed OR (VersionNT64 &gt;= 603 AND WindowsBuild &gt;= 17763)"
-      Message="TVBox requires 64-bit Windows 10 version 1809 or later." />
-
     <Feature Id="Complete" Title="TVBox" Level="1">
       <ComponentRef Id="MainExecutable" />
       <ComponentGroupRef Id="PublishedFiles" />

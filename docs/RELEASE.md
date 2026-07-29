@@ -1,11 +1,11 @@
 # TVBox for Windows 发布清单
 
-本文用于生成不包含开发者配置、历史、收藏、日志或私人订阅的 GitHub Release。正式发布应从干净的 Git 提交构建，不要直接压缩日常运行目录或 `%LOCALAPPDATA%\FongMi.TV`。
+本文用于生成不包含开发者配置、历史、收藏、日志或私人订阅的 GitHub Release。正式发布应从干净的 Git 提交构建，不要直接压缩日常运行目录或 `%LOCALAPPDATA%\TVBox for Windows`。
 
 ## 1. 发布前确认
 
 - 确认工作树中的改动均属于本次版本，没有临时截图、日志、测试配置或下载文件。
-- 确认 `windows/FongMi.TV/wexfnwconfig.json`、`prefs.json`、`configs.json`、`history.json`、`keep.json`、`app.log` 等本地文件未被 Git 跟踪。
+- 确认 `windows/TVBox.Windows/wexfnwconfig.json`、`prefs.json`、`configs.json`、`history.json`、`keep.json`、`app.log` 等本地文件未被 Git 跟踪。
 - 搜索仓库中的私人订阅、带用户名/密码的 URL、Cookie、Token、私钥和 `C:\Users\...` 本机路径。
 - 更新版本号、README、变更说明和已知问题。
 - 确认项目级 `LICENSE`、第三方版权声明及所分发 FFmpeg/Node 二进制的许可要求。
@@ -27,8 +27,8 @@ rg -n --hidden -g '!**/bin/**' -g '!**/obj/**' -g '!artifacts/**' `
 x64：
 
 ```powershell
-dotnet restore .\windows\FongMi.TV\FongMi.TV.csproj -r win-x64
-dotnet build .\windows\FongMi.TV\FongMi.TV.csproj `
+dotnet restore .\windows\TVBox.Windows\TVBox.Windows.csproj -r win-x64
+dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
   -c Release -p:Platform=x64 -r win-x64 --no-restore -warnaserror
 ```
 
@@ -37,15 +37,15 @@ dotnet build .\windows\FongMi.TV\FongMi.TV.csproj `
 ## 3. 生成便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.0
+.\scripts\Publish-Portable.ps1 -Version 1.0.1
 ```
 
 默认输出：
 
 ```text
 artifacts/
-|-- TVBox-x64-1.0.0/
-|-- TVBox-x64-1.0.0.zip
+|-- TVBox-x64-1.0.1/
+|-- TVBox-x64-1.0.1.zip
 `-- SHA256SUMS.txt
 ```
 
@@ -64,16 +64,16 @@ artifacts/
 安装器应只从同一版本的干净便携目录取文件，不得从 `bin/`、`obj/`、旧 `windows/publish/` 或用户运行目录取文件。
 
 ```powershell
-.\installer\build.ps1 -Version 1.0.0
+.\installer\build.ps1 -Version 1.0.1
 ```
 
-安装包输出为 `artifacts\TVBox-Setup-x64-1.0.0.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
+安装包输出为 `artifacts\TVBox-Setup-x64-1.0.1.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
 
 至少确认：
 
 - 安装路径和开始菜单名称使用 `TVBox`。
 - 升级前能关闭正在运行的 `TVBox.exe`，或明确提示用户退出。
-- 卸载程序默认不要静默删除 `%LOCALAPPDATA%\FongMi.TV`，避免误删用户收藏和历史；如提供清理选项，必须显式说明且由用户选择。
+- 卸载程序默认不要静默删除 `%LOCALAPPDATA%\TVBox for Windows`，避免误删用户收藏和历史；如提供清理选项，必须显式说明且由用户选择。
 - 安装器架构必须标记为 x64，不得误标为 ARM64。
 - 签名发生在最终文件生成后；签名后的安装包重新计算 SHA-256。
 
@@ -105,10 +105,11 @@ Release 说明中不要粘贴私人订阅或带鉴权的复现地址。若没有
 安装并配置好 GitHub CLI 后可使用类似命令发布；实际仓库、标签和文件名以当前版本为准：
 
 ```powershell
-git tag -a v1.0.0 -m 'TVBox for Windows v1.0.0'
-git push origin v1.0.0
-gh release create v1.0.0 .\artifacts\*.zip .\artifacts\*Setup*.msi `
-  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.0'
+git tag -a v1.0.1 -m 'TVBox for Windows v1.0.1'
+git push origin v1.0.1
+gh release create v1.0.1 .\artifacts\TVBox-x64-1.0.1.zip `
+  .\artifacts\TVBox-Setup-x64-1.0.1.msi `
+  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.1'
 ```
 
 先创建草稿 Release 并人工核对附件、哈希和说明，再公开发布。
