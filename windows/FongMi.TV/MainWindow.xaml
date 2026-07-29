@@ -1,0 +1,146 @@
+<Window
+    x:Class="FongMi.TV.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <Grid x:Name="RootGrid">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="ShellWidthStates">
+                <VisualState x:Name="CompactShell">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0"/>
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="BrandName.Visibility" Value="Collapsed"/>
+                        <Setter Target="GlobalSearch.Width" Value="220"/>
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="MediumShell">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="860"/>
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="BrandName.Visibility" Value="Visible"/>
+                        <Setter Target="GlobalSearch.Width" Value="320"/>
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="WideShell">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1180"/>
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="BrandName.Visibility" Value="Visible"/>
+                        <Setter Target="GlobalSearch.Width" Value="440"/>
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="52"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 自绘标题栏：品牌 + 居中全局搜索 + 系统按钮留白 -->
+        <Grid x:Name="TitleBarArea">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="140"/>
+            </Grid.ColumnDefinitions>
+            <StackPanel Orientation="Horizontal" Spacing="10" Margin="14,0,12,0" VerticalAlignment="Center">
+                <Image Width="30" Height="30" Source="ms-appx:///Assets/icon-title.png" Stretch="Uniform"/>
+                <TextBlock x:Name="BrandName" Text="TVBox" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            </StackPanel>
+            <Grid Grid.Column="1">
+                <Border x:Name="DragRegion" Background="Transparent"/>
+                <AutoSuggestBox x:Name="GlobalSearch"
+                                Width="440"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                QueryIcon="Find"
+                                PlaceholderText="搜索全部站点"
+                                QuerySubmitted="OnGlobalSearch"/>
+            </Grid>
+        </Grid>
+
+        <!-- 导航 + 内容 -->
+        <NavigationView x:Name="Nav"
+                        Grid.Row="1"
+                        PaneDisplayMode="Left"
+                        CompactPaneLength="48"
+                        OpenPaneLength="164"
+                        IsPaneOpen="False"
+                        IsPaneToggleButtonVisible="False"
+                        IsTitleBarAutoPaddingEnabled="False"
+                        IsBackButtonVisible="Collapsed"
+                        IsSettingsVisible="True"
+                        ItemInvoked="OnNavInvoked">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="点播" Tag="vod">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE714;"/></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="直播" Tag="live">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE7F4;"/></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="搜索" Tag="search">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE721;"/></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="收藏" Tag="keep">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE734;"/></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="历史" Tag="history">
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE81C;"/></NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <Grid x:Name="PageHost">
+                <!-- 每个侧栏栏目拥有独立 Frame，切换栏目不会重建页面或丢失导航栈。 -->
+                <Frame x:Name="VodFrame"/>
+                <Frame x:Name="LiveFrame" Visibility="Collapsed"/>
+                <Frame x:Name="SearchFrame" Visibility="Collapsed"/>
+                <Frame x:Name="KeepFrame" Visibility="Collapsed"/>
+                <Frame x:Name="HistoryFrame" Visibility="Collapsed"/>
+                <Frame x:Name="SettingsFrame" Visibility="Collapsed"/>
+
+                <!-- 无配置时的欢迎/配置输入卡片 -->
+                <Grid x:Name="WelcomePanel" Visibility="Collapsed" Background="Transparent">
+                    <Border MaxWidth="520"
+                            Margin="24"
+                            Padding="32"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Center"
+                            CornerRadius="8"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1">
+                        <StackPanel Spacing="16">
+                            <TextBlock Text="欢迎使用 TVBox" FontSize="28" FontWeight="SemiBold"/>
+                            <TextBlock Text="请输入点播配置地址开始使用（支持 http/https 链接）"
+                                       TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <TextBox x:Name="ConfigUrlBox"
+                                     PlaceholderText="http(s)://... 配置地址"
+                                     KeyDown="OnConfigUrlKeyDown"/>
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <Button x:Name="LoadConfigButton"
+                                        Content="加载配置"
+                                        Style="{StaticResource AccentButtonStyle}"
+                                        Click="OnLoadConfig"/>
+                                <ProgressRing x:Name="LoadRing" IsActive="False" Width="24" Height="24"/>
+                            </StackPanel>
+                            <InfoBar x:Name="LoadErrorBar" IsOpen="False" Severity="Error" Title="加载失败"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <!-- 配置公告 -->
+                <InfoBar x:Name="NoticeBar"
+                         VerticalAlignment="Top"
+                         Margin="16"
+                         IsOpen="False"
+                         IsClosable="True"
+                         Severity="Informational"
+                         Title="公告"/>
+            </Grid>
+        </NavigationView>
+    </Grid>
+</Window>

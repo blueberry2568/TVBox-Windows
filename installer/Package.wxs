@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Id="TVBox.Windows.x64"
+    Name="TVBox"
+    Manufacturer="TVBox"
+    Language="2052"
+    Version="$(var.ProductVersion)"
+    ProductCode="$(var.ProductCode)"
+    UpgradeCode="10D40A0E-1DCC-4DD4-934B-6510C774F232"
+    Scope="perMachine">
+
+    <SummaryInformation Description="TVBox Windows x64 installer" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of TVBox is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="TVBoxIcon.ico" SourceFile="!(bindpath.Publish)\Assets\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="TVBoxIcon.ico" />
+    <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
+
+    <!-- MSI reports Windows 10/11 as VersionNT64=603; WindowsBuild enforces 1809+. -->
+    <Launch
+      Condition="Installed OR (VersionNT64 &gt;= 603 AND WindowsBuild &gt;= 17763)"
+      Message="TVBox requires 64-bit Windows 10 version 1809 or later." />
+
+    <Feature Id="Complete" Title="TVBox" Level="1">
+      <ComponentRef Id="MainExecutable" />
+      <ComponentGroupRef Id="PublishedFiles" />
+    </Feature>
+
+    <Component Id="MainExecutable" Directory="INSTALLFOLDER" Bitness="always64">
+      <File Id="TVBoxExe" Source="!(bindpath.Publish)\TVBox.exe" KeyPath="yes">
+        <Shortcut
+          Id="StartMenuShortcut"
+          Directory="ApplicationProgramsFolder"
+          Name="TVBox"
+          Description="TVBox"
+          Advertise="yes" />
+      </File>
+      <RemoveFolder Id="RemoveApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+    </Component>
+  </Package>
+
+  <Fragment>
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="TVBox" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ApplicationProgramsFolder" Name="TVBox" />
+    </StandardDirectory>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="PublishedFiles" Directory="INSTALLFOLDER" Source="$(var.PublishDir)">
+      <Files Include="**">
+        <Exclude Files="TVBox.exe" />
+        <Exclude Files="**\*.pdb" />
+        <Exclude Files="**\*.log" />
+        <Exclude Files="**\*.tmp" />
+        <Exclude Files="**\*.bak" />
+      </Files>
+    </ComponentGroup>
+  </Fragment>
+</Wix>

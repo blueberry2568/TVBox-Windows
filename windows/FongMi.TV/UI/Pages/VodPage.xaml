@@ -1,0 +1,117 @@
+<Page
+    x:Class="FongMi.TV.UI.Pages.VodPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:FongMi.TV.UI.Controls"
+    NavigationCacheMode="Enabled">
+
+    <Page.Resources>
+        <DataTemplate x:Key="CardTemplate">
+            <controls:PosterCard Margin="6"
+                                 Pic="{Binding Pic}"
+                                 Title="{Binding Title}"
+                                 Remark="{Binding Remark}"/>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- 顶部：标题 + 站点下拉 + 筛选开关 + 加载中 -->
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock Text="点播" Style="{StaticResource PageTitleTextStyle}" VerticalAlignment="Center"/>
+            <ComboBox x:Name="SiteCombo"
+                      MinWidth="180" MaxWidth="280"
+                      VerticalAlignment="Center"
+                      DisplayMemberPath="Name"
+                      SelectionChanged="OnSiteChanged"
+                      ToolTipService.ToolTip="切换站点"/>
+            <ToggleButton x:Name="FilterToggle"
+                          VerticalAlignment="Center"
+                          Visibility="Collapsed"
+                          Click="OnFilterToggle"
+                          ToolTipService.ToolTip="筛选">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE71C;" FontSize="14"/>
+                    <TextBlock Text="筛选"/>
+                </StackPanel>
+            </ToggleButton>
+            <ProgressRing x:Name="Busy" IsActive="False" Width="24" Height="24" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- 分类横向 Tab -->
+        <ListView x:Name="ClassList"
+                  Grid.Row="1"
+                  Margin="0,8,0,0"
+                  Height="48"
+                  SelectionMode="Single"
+                  SelectionChanged="OnClassChanged"
+                  ScrollViewer.HorizontalScrollMode="Enabled"
+                  ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                  ScrollViewer.VerticalScrollMode="Disabled"
+                  ScrollViewer.VerticalScrollBarVisibility="Disabled">
+            <ListView.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <ItemsStackPanel Orientation="Horizontal"/>
+                </ItemsPanelTemplate>
+            </ListView.ItemsPanel>
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding TypeName}" FontSize="15" Margin="4,6"/>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+
+        <!-- 筛选面板（代码后置构建：每个 Filter 一行 chips） -->
+        <Border x:Name="FilterCard"
+                Grid.Row="2"
+                Margin="0,8,0,0"
+                Visibility="Collapsed"
+                Style="{StaticResource CardBorderStyle}"
+                Padding="12">
+            <StackPanel x:Name="FilterPanel" Spacing="4"/>
+        </Border>
+
+        <!-- 文件夹层级（面包屑返回） -->
+        <StackPanel x:Name="FolderBar"
+                    Grid.Row="3"
+                    Orientation="Horizontal"
+                    Spacing="8"
+                    Margin="0,8,0,0"
+                    Visibility="Collapsed">
+            <Button Click="OnFolderBack" ToolTipService.ToolTip="返回上级">
+                <FontIcon Glyph="&#xE72B;" FontSize="14"/>
+            </Button>
+            <TextBlock x:Name="FolderPathText"
+                       VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </StackPanel>
+
+        <InfoBar x:Name="MsgBar" Grid.Row="4" IsOpen="False" Severity="Warning" Title="提示" Margin="0,8,0,0"/>
+
+        <!-- 内容网格（无限滚动） -->
+        <Grid Grid.Row="5" Margin="0,8,0,0">
+            <GridView x:Name="ContentGrid"
+                      SelectionMode="None"
+                      IsItemClickEnabled="True"
+                      ItemClick="OnItemClick"
+                      ItemTemplate="{StaticResource CardTemplate}"
+                      Loaded="OnGridLoaded"
+                      Padding="0,0,0,24"/>
+            <TextBlock x:Name="EmptyText"
+                       Text="暂无内容"
+                       Visibility="Collapsed"
+                       HorizontalAlignment="Center"
+                       Margin="0,48,0,0"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Grid>
+    </Grid>
+</Page>

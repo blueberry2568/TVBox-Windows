@@ -1,0 +1,19 @@
+FFmpeg shared libraries
+=======================
+
+Version: n7.1.5-10-g2aefd64d48-20260728
+License: GNU Lesser General Public License version 3 or later
+Architecture: Windows x86-64
+
+Binary archive:
+https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-lgpl-shared-7.1.zip
+
+Archive SHA-256:
+0f8d9116cd9f270d5626d971c2b77d7f1b7b88ad27807175edc72d92919369a1
+
+Corresponding source and build scripts:
+https://github.com/FFmpeg/FFmpeg/tree/2aefd64d48
+https://github.com/BtbN/FFmpeg-Builds
+
+The libraries are dynamically loaded from the ffmpeg directory. You may
+replace them with ABI-compatible FFmpeg 7.1 shared libraries.

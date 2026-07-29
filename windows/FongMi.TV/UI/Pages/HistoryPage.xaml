@@ -1,0 +1,75 @@
+<Page
+    x:Class="FongMi.TV.UI.Pages.HistoryPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:FongMi.TV.UI.Controls"
+    NavigationCacheMode="Enabled">
+
+    <Page.Resources>
+        <DataTemplate x:Key="HistoryTemplate">
+            <StackPanel Margin="6" Width="150">
+                <StackPanel.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="删除该条" Click="OnDeleteOne">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE74D;"/>
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Text="清空全部" Click="OnClearAll">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE75C;"/>
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </StackPanel.ContextFlyout>
+                <controls:PosterCard Pic="{Binding Pic}"
+                                     Title="{Binding Title}"
+                                     Remark="{Binding Remark}"/>
+                <!-- 底部进度条（Position/Duration） -->
+                <ProgressBar Maximum="100"
+                             Value="{Binding Percent}"
+                             Margin="2,6,2,0"/>
+                <TextBlock Text="{Binding Meta}"
+                           FontSize="11"
+                           Margin="2,4,2,0"
+                           TextTrimming="CharacterEllipsis"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Padding="{StaticResource PagePadding}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <TextBlock Text="历史" Style="{StaticResource PageTitleTextStyle}" VerticalAlignment="Center"/>
+            <TextBlock x:Name="CountText"
+                       VerticalAlignment="Center"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            <Button x:Name="ClearButton" Visibility="Collapsed" Click="OnClearAll" ToolTipService.ToolTip="清空全部">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE75C;" FontSize="14"/>
+                    <TextBlock Text="清空"/>
+                </StackPanel>
+            </Button>
+        </StackPanel>
+
+        <Grid Grid.Row="1" Margin="0,8,0,0">
+            <GridView x:Name="HistoryGrid"
+                      SelectionMode="None"
+                      IsItemClickEnabled="True"
+                      ItemClick="OnItemClick"
+                      ItemTemplate="{StaticResource HistoryTemplate}"
+                      Padding="0,0,0,24"/>
+            <TextBlock x:Name="EmptyText"
+                       Text="暂无观看历史"
+                       Visibility="Collapsed"
+                       HorizontalAlignment="Center"
+                       Margin="0,48,0,0"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+        </Grid>
+    </Grid>
+</Page>
