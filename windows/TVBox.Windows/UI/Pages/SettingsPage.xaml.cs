@@ -533,7 +533,7 @@ public sealed partial class SettingsPage : Page
     {
         try
         {
-            var dir = Path.Combine(AppContext.BaseDirectory, "ffmpeg");
+            var dir = AppPaths.FFmpegDir;
             Directory.CreateDirectory(dir);
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             {

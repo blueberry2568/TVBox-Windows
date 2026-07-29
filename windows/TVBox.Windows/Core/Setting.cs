@@ -1,54 +1,115 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 
 namespace TVBoxForWindows.Core;
 
-/// <summary>SharedPreferences 等价物：键值存储，落盘为 prefs.json。也承载 JS local / /cache 端点。</summary>
+/// <summary>Thread-safe key/value settings persisted in prefs.json.</summary>
 public static class Setting
 {
-    static ConcurrentDictionary<string, string> Map = new();
+    static readonly object Sync = new();
+    static readonly JsonSerializerOptions SaveOptions = new() { WriteIndented = true };
+    static Dictionary<string, string> _map = new(StringComparer.Ordinal);
+
     static string FilePath => Path.Combine(AppPaths.Root, "prefs.json");
 
     public static void Load()
     {
-        try
+        lock (Sync)
         {
-            if (File.Exists(FilePath))
-                Map = new(JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(FilePath)) ?? new());
+            var loaded = DurableJsonFile.Read(
+                FilePath,
+                json => JsonSerializer.Deserialize<Dictionary<string, string>>(json),
+                () => new Dictionary<string, string>());
+            _map = new Dictionary<string, string>(loaded, StringComparer.Ordinal);
         }
-        catch { Map = new(); }
     }
 
-    /// <summary>修复旧版设置页初始化时把默认倍速误写为 0.5x 的一次性数据迁移。</summary>
+    /// <summary>Repairs invalid playback defaults written by older builds.</summary>
     public static bool Migrate()
     {
         const string key = "migration_speed_init_20260727";
-        if (GetBool(key)) return false;
-        var speed = GetFloat("speed", 1f);
-        var fixedSpeed = speed < 1f || speed > 4f;
-        if (fixedSpeed) Map["speed"] = "1";
-        if (GetFloat("danmaku_alpha", 0.9f) <= 0.1f) Map["danmaku_alpha"] = "0.9";
-        if (GetInt("danmaku_size", 24) <= 12) Map["danmaku_size"] = "24";
-        Map[key] = "true";
-        Save();
-        return fixedSpeed;
+        lock (Sync)
+        {
+            if (GetBoolLocked(key)) return false;
+
+            var speed = GetFloatLocked("speed", 1f);
+            var fixedSpeed = speed < 1f || speed > 4f;
+            if (fixedSpeed) _map["speed"] = "1";
+            if (GetFloatLocked("danmaku_alpha", 0.9f) <= 0.1f) _map["danmaku_alpha"] = "0.9";
+            if (GetIntLocked("danmaku_size", 24) <= 12) _map["danmaku_size"] = "24";
+            _map[key] = "true";
+            SaveLocked();
+            return fixedSpeed;
+        }
     }
 
-    static void Save()
+    public static string GetString(string key, string def = "")
     {
-        try { File.WriteAllText(FilePath, JsonSerializer.Serialize(Map, new JsonSerializerOptions { WriteIndented = true })); } catch { }
+        lock (Sync) return _map.TryGetValue(key, out var value) ? value : def;
     }
 
-    public static string GetString(string key, string def = "") => Map.TryGetValue(key, out var v) ? v : def;
-    public static int GetInt(string key, int def = 0) => int.TryParse(GetString(key, null), out var v) ? v : def;
-    public static bool GetBool(string key, bool def = false) => bool.TryParse(GetString(key, null), out var v) ? v : def;
-    public static float GetFloat(string key, float def = 0) => float.TryParse(GetString(key, null), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : def;
+    public static int GetInt(string key, int def = 0)
+    {
+        lock (Sync) return GetIntLocked(key, def);
+    }
 
-    /// <summary>写入统一用 InvariantCulture，避免逗号小数区域下浮点设置回读失败。</summary>
-    public static void Put(string key, object value) { Map[key] = value is IFormattable f ? f.ToString(null, System.Globalization.CultureInfo.InvariantCulture) : value?.ToString() ?? ""; Save(); }
-    public static void Remove(string key) { Map.TryRemove(key, out _); Save(); }
+    public static bool GetBool(string key, bool def = false)
+    {
+        lock (Sync) return GetBoolLocked(key, def);
+    }
 
-    // ---- 应用设置（与 Android 端 Setting 对应）----
+    public static float GetFloat(string key, float def = 0)
+    {
+        lock (Sync) return GetFloatLocked(key, def);
+    }
+
+    public static void Put(string key, object value)
+    {
+        var text = value is IFormattable formattable
+            ? formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture)
+            : value?.ToString() ?? "";
+
+        lock (Sync)
+        {
+            if (_map.TryGetValue(key, out var current) && current == text) return;
+            _map[key] = text;
+            SaveLocked();
+        }
+    }
+
+    public static void Remove(string key)
+    {
+        lock (Sync)
+        {
+            if (!_map.Remove(key)) return;
+            SaveLocked();
+        }
+    }
+
+    static void SaveLocked()
+    {
+        var snapshot = new Dictionary<string, string>(_map, StringComparer.Ordinal);
+        DurableJsonFile.Write(FilePath, JsonSerializer.Serialize(snapshot, SaveOptions));
+    }
+
+    static string GetStringLocked(string key, string def = "") =>
+        _map.TryGetValue(key, out var value) ? value : def;
+
+    static int GetIntLocked(string key, int def = 0) =>
+        int.TryParse(GetStringLocked(key, null), out var value) ? value : def;
+
+    static bool GetBoolLocked(string key, bool def = false) =>
+        bool.TryParse(GetStringLocked(key, null), out var value) ? value : def;
+
+    static float GetFloatLocked(string key, float def = 0) =>
+        float.TryParse(
+            GetStringLocked(key, null),
+            System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var value)
+            ? value
+            : def;
+
+    // Application settings. All user-facing switches default to off.
     public static string Doh { get => GetString("doh"); set => Put("doh", value); }
     public static string Ua { get => GetString("ua", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"); set => Put("ua", value); }
     public static string Proxy { get => GetString("proxy"); set => Put("proxy", value); }
@@ -57,13 +118,13 @@ public static class Setting
     public static int PlayTimeout { get => GetInt("play_timeout", 15000); set => Put("play_timeout", value); }
     public static bool LocalServerLan { get => GetBool("local_server_lan"); set => Put("local_server_lan", value); }
     public static bool Incognito { get => GetBool("incognito"); set => Put("incognito", value); }
-    public static bool DanmakuLoad { get => GetBool("danmaku_load", true); set => Put("danmaku_load", value); }
+    public static bool DanmakuLoad { get => GetBool("danmaku_load"); set => Put("danmaku_load", value); }
     public static bool DanmakuAuto { get => GetBool("danmaku_auto"); set => Put("danmaku_auto", value); }
     public static string DanmakuApi { get => GetString("danmaku_api"); set => Put("danmaku_api", value); }
     public static double Speed { get => GetFloat("speed", 1f); set => Put("speed", value); }
     public static int Scale { get => GetInt("scale"); set => Put("scale", value); }
     public static int SearchDisplay { get => GetInt("search_display"); set => Put("search_display", value); }
-    public static int Flag { get => GetInt("flag", 2); set => Put("flag", value); } // 播放器解码偏好
+    public static int Flag { get => GetInt("flag", 2); set => Put("flag", value); }
     public static string Keep { get => GetString("keep"); set => Put("keep", value); }
     public static string HomeSite { get => GetString("home_site"); set => Put("home_site", value); }
     public static string Parse { get => GetString("parse"); set => Put("parse", value); }

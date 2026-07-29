@@ -48,7 +48,7 @@
                 <ColumnDefinition Width="140"/>
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" Spacing="10" Margin="14,0,12,0" VerticalAlignment="Center">
-                <Image Width="30" Height="30" Source="ms-appx:///Assets/icon-title.png" Stretch="Uniform"/>
+                <Image x:Name="BrandIcon" Width="30" Height="30" Stretch="Uniform"/>
                 <TextBlock x:Name="BrandName" Text="TVBox" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
             </StackPanel>
             <Grid Grid.Column="1">
@@ -66,7 +66,7 @@
         <!-- 导航 + 内容 -->
         <NavigationView x:Name="Nav"
                         Grid.Row="1"
-                        PaneDisplayMode="Left"
+                        PaneDisplayMode="LeftCompact"
                         CompactPaneLength="48"
                         OpenPaneLength="164"
                         IsPaneOpen="False"
@@ -77,19 +77,19 @@
                         ItemInvoked="OnNavInvoked">
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="点播" Tag="vod">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE714;"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE714;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="直播" Tag="live">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE7F4;"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE7F4;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="搜索" Tag="search">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE721;"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE721;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="收藏" Tag="keep">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE734;"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE734;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="历史" Tag="history">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE81C;"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE81C;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <Grid x:Name="PageHost">

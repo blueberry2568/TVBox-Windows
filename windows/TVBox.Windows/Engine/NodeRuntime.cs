@@ -52,7 +52,7 @@ public static class NodeRuntime
     {
         try
         {
-            var bundled = Path.Combine(AppPaths.AssetNode, "node.exe");
+            var bundled = Path.Combine(AppPaths.NodeRuntimeDir, "node.exe");
             if (File.Exists(bundled)) return bundled;
 
             var home = Environment.GetEnvironmentVariable("NODE_HOME");
@@ -112,7 +112,7 @@ public static class NodeRuntime
             _startupError = null;
             if (!EnsureNode()) return null;
 
-            var bootstrap = Path.Combine(AppPaths.AssetNode, "catpaw-bootstrap.js");
+            var bootstrap = Path.Combine(AppPaths.NodeRuntimeDir, "catpaw-bootstrap.js");
             if (!File.Exists(bootstrap))
             {
                 LastError = "缺少 CatPawOpen 启动组件 catpaw-bootstrap.js";
@@ -184,6 +184,7 @@ public static class NodeRuntime
             // Keep the active service alive until its replacement is fully ready. This
             // makes a failed refresh non-destructive for pages using the current source.
             var previous = _proc;
+            NodeConfigChangeMonitor.Stop();
             _proc = candidate;
             candidate = null;
             _scriptPath = scriptPath;
@@ -339,6 +340,7 @@ public static class NodeRuntime
 
     public static void Shutdown()
     {
+        NodeConfigChangeMonitor.Stop();
         Interlocked.Exchange(ref _shutdownRequested, 1);
         CancelStartup();
         _ = ShutdownAsync();
@@ -346,6 +348,7 @@ public static class NodeRuntime
 
     public static void TerminateForExit()
     {
+        NodeConfigChangeMonitor.Stop();
         Interlocked.Exchange(ref _shutdownRequested, 1);
         CancelStartup();
         var starting = Interlocked.Exchange(ref _startingProc, null);
@@ -361,6 +364,7 @@ public static class NodeRuntime
 
     public static async Task ShutdownAsync()
     {
+        NodeConfigChangeMonitor.Stop();
         Interlocked.Exchange(ref _shutdownRequested, 1);
         CancelStartup();
         await Lock.WaitAsync().ConfigureAwait(false);

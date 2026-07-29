@@ -1,6 +1,6 @@
 # TVBox for Windows 发布清单
 
-本文用于生成不包含开发者配置、历史、收藏、日志或私人订阅的 GitHub Release。正式发布应从干净的 Git 提交构建，不要直接压缩日常运行目录或 `%LOCALAPPDATA%\TVBox for Windows`。
+本文用于生成不包含开发者配置、历史、收藏、日志或私人订阅的无状态 GitHub Release。正式发布应从干净的 Git 提交构建，不要直接压缩日常运行目录或 `%LOCALAPPDATA%\TVBox for Windows`。升级和卸载默认保留该目录中的用户设置、源、历史与收藏，发布产物不得读取或覆盖这些数据。
 
 ## 1. 发布前确认
 
@@ -37,23 +37,52 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ## 3. 生成便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.2
+.\scripts\Publish-Portable.ps1 -Version 1.0.3
 ```
 
 默认输出：
 
 ```text
 artifacts/
-|-- TVBox-x64-1.0.2/
-|-- TVBox-x64-1.0.2.zip
+|-- TVBox-x64-1.0.3/
+|-- TVBox-x64-1.0.3.zip
 `-- SHA256SUMS.txt
 ```
 
+发布目录与 MSI 安装目录必须使用以下结构：
+
+```text
+TVBox/
+|-- TVBox.exe
+|-- assets/
+|   |-- icons/
+|   `-- js/
+|-- ffmpeg/
+|-- libs/
+|   |-- TVBox.dll
+|   |-- TVBox.deps.json
+|   `-- TVBox.runtimeconfig.json
+|-- locales/
+|   `-- winui/
+|       |-- en-us/ ja-JP/ ko-KR/ zh-CN/ zh-TW/
+|       |-- Microsoft.ui.xaml.dll
+|       `-- Microsoft.UI.Xaml.Phone.dll
+|-- node/
+|-- runtime/
+|   |-- host/fxr/<version>/hostfxr.dll
+|   |-- shared/Microsoft.NETCore.App/<version>/
+|   `-- shared/Microsoft.WindowsDesktop.App/<version>/
+|-- README.md
+`-- THIRD-PARTY-NOTICES.md
+```
+
+`TVBox.exe` 是指向 `libs\TVBox.dll` 的根 apphost；它的 app-relative dotnet 路径必须从托管入口目录解析为 `..\runtime`。`runtime` 必须是标准私有 dotnet-root，而不是平铺的 self-contained publish 输出。整个程序目录必须恰好只有一个 `TVBox.exe`，`libs` 中不得再出现同名主程序。WinUI 免注册激活清单必须指向结构化目录；两个带 MUI 的 WinUI 模块与其语言资源统一位于 `locales\winui`，不得再镜像到 `libs`。
+
 脚本执行以下检查：
 
-- 使用 Release、自包含 Windows App SDK 和明确的 RID 发布。
+- 使用 Release、框架依赖应用、私有 .NET Desktop Runtime、自包含 Windows App SDK、明确的 RID 和结构化多文件目标发布；禁止单文件打包。
 - 禁止包中出现常见用户数据文件和运行时缓存目录。
-- 校验根目录启动器、`app/TVBox.exe`、`.deps.json`、`.runtimeconfig.json`、`app/Assets/node/node.exe`、JS 运行库和关键 FFmpeg DLL。
+- 校验根 apphost、WinUI 激活清单、唯一的 `TVBox.exe`、版本元数据、`libs` 中的托管入口，以及 `runtime\host\fxr` 和两个 `runtime\shared` 框架；同时校验 Node、JS 运行库、语言资源和关键 FFmpeg DLL。
 - 扫描文本文件中的本机用户路径、带凭据 URL、私钥和常见 GitHub Token。
 - 复制公开 README，创建 ZIP 并写入 SHA-256。
 
@@ -64,14 +93,15 @@ artifacts/
 安装器应只从同一版本的干净便携目录取文件，不得从 `bin/`、`obj/`、旧 `windows/publish/` 或用户运行目录取文件。
 
 ```powershell
-.\installer\build.ps1 -Version 1.0.2
+.\installer\build.ps1 -Version 1.0.3
 ```
 
-安装包输出为 `artifacts\TVBox-Setup-x64-1.0.2.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
+安装包输出为 `artifacts\TVBox-Setup-x64-1.0.3.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
 
 至少确认：
 
-- 安装向导可以修改安装路径，开始菜单名称使用 `TVBox`。
+- 安装向导可以修改安装路径，开始菜单名称使用 `TVBox`，并允许用户选择是否创建桌面快捷方式。
+- 安装后的文件结构必须与便携包一致：根目录只有一个 `TVBox.exe`，应用依赖、私有 .NET、Node、FFmpeg、Assets 和语言资源按上述目录分类。
 - 升级前能关闭正在运行的 `TVBox.exe`，或明确提示用户退出。
 - 卸载程序默认不要静默删除 `%LOCALAPPDATA%\TVBox for Windows`，避免误删用户收藏和历史；如提供清理选项，必须显式说明且由用户选择。
 - 安装器架构必须标记为 x64，不得误标为 ARM64。
@@ -82,6 +112,7 @@ artifacts/
 自动构建通过不等于播放行为已验证。发布前由人工至少检查：
 
 - 全新数据目录首次启动，没有预置点播源、直播源、收藏或历史。
+- 在未安装系统 .NET Desktop Runtime 的干净 x64 环境中，根 `TVBox.exe` 仍能使用随包 `runtime` 启动；不得出现安装 .NET 的提示。
 - 点播配置、CatPawOpen 配置和独立直播配置可以添加、切换和重载。
 - 点播详情、搜索、播放、暂停、拖动进度、上下集、线路、倍率、比例和字幕。
 - 直播频道、上下频道、暂停、线路切换及可回看内容的进度行为。
@@ -102,14 +133,16 @@ artifacts/
 
 Release 说明中不要粘贴私人订阅或带鉴权的复现地址。若没有代码签名，应明确说明 SmartScreen 可能提示未知发布者。
 
-安装并配置好 GitHub CLI 后可使用类似命令发布；实际仓库、标签和文件名以当前版本为准：
+本地构建完成不代表获得上传授权。未收到项目维护者明确的指定上传指令时，禁止执行 Git 提交、打标签、推送或创建/更新 GitHub Release；构建脚本也不得包含这些操作。
+
+收到明确上传指令并配置好 GitHub CLI 后，才可使用类似命令发布；实际仓库、标签和文件名以当前版本为准：
 
 ```powershell
-git tag -a v1.0.2 -m 'TVBox for Windows v1.0.2'
-git push origin v1.0.2
-gh release create v1.0.2 .\artifacts\TVBox-x64-1.0.2.zip `
-  .\artifacts\TVBox-Setup-x64-1.0.2.msi `
-  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.2'
+git tag -a v1.0.3 -m 'TVBox for Windows v1.0.3'
+git push origin v1.0.3
+gh release create v1.0.3 .\artifacts\TVBox-x64-1.0.3.zip `
+  .\artifacts\TVBox-Setup-x64-1.0.3.msi `
+  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.3'
 ```
 
 先创建草稿 Release 并人工核对附件、哈希和说明，再公开发布。

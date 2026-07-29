@@ -210,7 +210,7 @@ public class LocalServer
 
     string StatusPage()
     {
-        var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "1.0.2";
+        var version = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "1.0.3";
         return "<!DOCTYPE html><html lang=\"zh\"><head><meta charset=\"utf-8\"><title>TVBox</title></head><body style=\"font-family:'Segoe UI',sans-serif;margin:40px\">"
              + "<h1>TVBox for Windows</h1>"
              + $"<p>端口：{Port}</p><p>版本：{version}</p>"

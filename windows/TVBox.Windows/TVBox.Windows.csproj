@@ -9,12 +9,15 @@
     <Product>TVBox for Windows</Product>
     <Authors>TVBox Windows contributors</Authors>
     <Description>A native Windows TVBox client built with WinUI 3.</Description>
-    <Version>1.0.2</Version>
-    <AssemblyVersion>1.0.2.0</AssemblyVersion>
-    <FileVersion>1.0.2.0</FileVersion>
+    <Version>1.0.3</Version>
+    <AssemblyVersion>1.0.3.0</AssemblyVersion>
+    <FileVersion>1.0.3.0</FileVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64</Platforms>
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseAppHost>true</UseAppHost>
+    <SelfContained>false</SelfContained>
+    <PublishSingleFile>false</PublishSingleFile>
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsPackageType>None</WindowsPackageType>
@@ -22,9 +25,12 @@
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <NoWarn>$(NoWarn);CS8305;CA1416</NoWarn>
-    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <ApplicationIcon>Assets\icons\icon.ico</ApplicationIcon>
+    <UserDataPublishExcludes>**\prefs.json;**\preferences.json;**\settings.json;**\configs.json;**\setting_config.json;**\history.json;**\keep.json;**\favorites.json;**\sources.json;**\cookies.json;**\credentials.json;**\tokens.json;**\app.log;**\wexfnwconfig.json;**\*.log;**\*.tmp;**\*.bak;**\*.dmp</UserDataPublishExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(UserDataPublishExcludes)</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>
@@ -38,9 +44,22 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Assets\**\*.*" Exclude="Assets\**\*.log;Assets\**\*.tmp">
+    <!-- WinUI promotes project-root None items into publish content. Keep all
+         machine-local state out of every release layout. -->
+    <None Remove="prefs.json;preferences.json;settings.json;configs.json;setting_config.json;history.json;keep.json;favorites.json;sources.json;cookies.json;credentials.json;tokens.json;app.log;wexfnwconfig.json" />
+    <Content Remove="prefs.json;preferences.json;settings.json;configs.json;setting_config.json;history.json;keep.json;favorites.json;sources.json;cookies.json;credentials.json;tokens.json;app.log;wexfnwconfig.json" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="Assets\**\*.*" Exclude="$(UserDataPublishExcludes)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>assets\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </Content>
+    <Content Include="node\**\*.*" Exclude="$(UserDataPublishExcludes)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <TargetPath>node\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </Content>
   </ItemGroup>
 
@@ -57,7 +76,26 @@
     </Content>
     <Content Include="..\..\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      <CopyToPublishDirectory>Never</CopyToPublishDirectory>
     </Content>
   </ItemGroup>
+
+  <Target Name="CreateStructuredPublishAppHost"
+          AfterTargets="Publish"
+          Condition="'$(CreateStructuredPublishAppHost)' == 'true'">
+    <Error Condition="'$(StructuredAppHostPath)' == ''"
+           Text="StructuredAppHostPath must be set for a structured publish." />
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(StructuredAppHostPath)'))" />
+    <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
+                   AppHostDestinationPath="$(StructuredAppHostPath)"
+                   AppBinaryName="libs\$(AssemblyName)$(TargetExt)"
+                   IntermediateAssembly="@(IntermediateAssembly->'%(FullPath)')"
+                   WindowsGraphicalUserInterface="$(_UseWindowsGraphicalUserInterface)"
+                   Retries="$(CopyRetryCount)"
+                   RetryDelayMilliseconds="$(CopyRetryDelayMilliseconds)"
+                   EnableMacOSCodeSign="false"
+                   DisableCetCompat="$(_DisableCetCompat)"
+                   DotNetSearchLocations="AppRelative"
+                   AppRelativeDotNet="..\runtime" />
+  </Target>
 </Project>

@@ -61,7 +61,7 @@ public class PlayerCore : IDisposable
             var dir = FindFFmpeg();
             if (dir == null)
             {
-                Core.Logger.E(TAG, "未找到完整的 FFmpeg 8.1 动态库目录（程序 app/ffmpeg 或数据目录 ffmpeg）");
+                Core.Logger.E(TAG, "未找到完整的 FFmpeg 8.1 动态库目录（程序内置 ffmpeg 或数据目录 ffmpeg）");
                 return;
             }
             FlyleafLib.Engine.Start(new EngineConfig
@@ -78,7 +78,7 @@ public class PlayerCore : IDisposable
     /// <summary>探测 FFmpeg dll 目录：程序目录/ffmpeg 优先，其次数据目录/ffmpeg。</summary>
     static string FindFFmpeg()
     {
-        foreach (var dir in new[] { Path.Combine(AppContext.BaseDirectory, "ffmpeg"), Path.Combine(AppPaths.Root ?? "", "ffmpeg") })
+        foreach (var dir in new[] { AppPaths.FFmpegDir, Path.Combine(AppPaths.Root ?? "", "ffmpeg") })
         {
             try
             {

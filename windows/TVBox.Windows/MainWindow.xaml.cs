@@ -5,11 +5,14 @@ using TVBoxForWindows.Models;
 using TVBoxForWindows.Server;
 using TVBoxForWindows.UI;
 using TVBoxForWindows.UI.Pages;
+using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Storage.Streams;
 
 namespace TVBoxForWindows;
 
@@ -21,8 +24,9 @@ public sealed partial class MainWindow : Window
     readonly WindowPresentationManager _presentation;
     bool _immersive;
     bool _immersiveBorderless;
-    bool _paneOpenBeforeImmersive;
     bool _navigationPaneOpen;
+    bool _shellRestorePending;
+    int _shellLayoutRefreshGeneration;
     bool _closed;
     bool _sourceSetupRequired;
     bool _sourceSetupLoading;
@@ -39,7 +43,7 @@ public sealed partial class MainWindow : Window
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(DragRegion);
         // 设置任务栏 / Alt-Tab 图标。
-        var iconPath = System.IO.Path.Combine(AppContext.BaseDirectory, "Assets", "icon.ico");
+        var iconPath = System.IO.Path.Combine(AppPaths.IconDir, "icon.ico");
         try
         {
             if (!System.IO.File.Exists(iconPath)) throw new System.IO.FileNotFoundException("图标文件不存在", iconPath);
@@ -50,8 +54,9 @@ public sealed partial class MainWindow : Window
         // so it can say "open" even when the user selected collapsed. Only the
         // settings page writes this new authoritative preference.
         _navigationPaneOpen = Setting.GetBool("nav_pane_user_open", false);
-        Nav.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
-        Nav.IsPaneOpen = _navigationPaneOpen;
+        ApplyNavigationPaneState();
+        RootGrid.Loaded += OnRootGridLoaded;
+        Nav.Loaded += OnNavigationViewLoaded;
         VodConfigService.Instance.Loaded += OnConfigLoaded;
         AppWindow.Changed += OnAppWindowChanged;
         Closed += (s, e) =>
@@ -67,6 +72,27 @@ public sealed partial class MainWindow : Window
         };
         HookServer();
         Startup();
+    }
+
+    async void OnRootGridLoaded(object sender, RoutedEventArgs e)
+    {
+        RootGrid.Loaded -= OnRootGridLoaded;
+        var path = System.IO.Path.Combine(AppPaths.IconDir, "icon-title.png");
+        try
+        {
+            if (!File.Exists(path)) throw new FileNotFoundException("标题栏图标文件不存在", path);
+            var bytes = await File.ReadAllBytesAsync(path);
+            using var stream = new InMemoryRandomAccessStream();
+            await stream.WriteAsync(bytes.AsBuffer());
+            stream.Seek(0);
+            var image = new BitmapImage();
+            await image.SetSourceAsync(stream);
+            if (!_closed) BrandIcon.Source = image;
+        }
+        catch (Exception exception)
+        {
+            Logger.E("TitleIcon", exception.Message);
+        }
     }
 
     public void SetImmersive(bool immersive)
@@ -87,39 +113,26 @@ public sealed partial class MainWindow : Window
         WindowFrameStyle.SetImmersive(this, immersive, false);
         if (immersive)
         {
-            _paneOpenBeforeImmersive = _navigationPaneOpen;
+            _shellRestorePending = false;
+            _shellLayoutRefreshGeneration++;
+            // Close while hidden so an expanded pane cannot be painted for one frame
+            // when the shell is restored after a presenter transition.
+            Nav.IsPaneOpen = false;
             Nav.IsPaneVisible = false;
-        }
-        else
-        {
-            _navigationPaneOpen = _paneOpenBeforeImmersive;
         }
         RootGrid.RowDefinitions[0].Height = immersive ? new GridLength(0) : new GridLength(TitleBarHeight);
         TitleBarArea.Visibility = immersive ? Visibility.Collapsed : Visibility.Visible;
-        // Left mode always reserves the compact rail in the NavigationView template.
-        // LeftMinimal removes that rail while keeping the content frame alive.
-        Nav.PaneDisplayMode = immersive
-            ? NavigationViewPaneDisplayMode.LeftMinimal
-            : NavigationViewPaneDisplayMode.Left;
-        Nav.CompactPaneLength = immersive ? 0 : CompactPaneWidth;
         var background = immersive ? new SolidColorBrush(Colors.Black) : null;
         RootGrid.Background = background;
         Nav.Background = background;
         PageHost.Background = background;
         SystemBackdrop = immersive ? null : new MicaBackdrop();
-        if (immersive)
+        if (!immersive)
         {
-            Nav.IsPaneVisible = false;
-        }
-        else
-        {
-            RestoreNavigationPaneVisualState();
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
-            {
-                if (_immersive) return;
-                WindowFrameStyle.SetImmersive(this, false, false);
-                RestoreNavigationPaneVisualState();
-            });
+            // The playback page leaves immersive mode before restoring the native
+            // presenter and bounds. Keep the pane hidden until those changes settle.
+            _shellRestorePending = true;
+            QueueShellLayoutRefresh();
         }
     }
 
@@ -159,12 +172,13 @@ public sealed partial class MainWindow : Window
                 WindowFrameStyle.SetImmersive(this, true, false);
             }
             _presentation.Restore();
+            QueueShellLayoutRefresh();
             return true;
         }
         catch (Exception e)
         {
             Logger.E("Presentation", "恢复主窗口失败：" + e.Message);
-            try { AppWindow.SetPresenter(AppWindowPresenterKind.Default); } catch { }
+            QueueShellLayoutRefresh();
             return false;
         }
     }
@@ -178,7 +192,17 @@ public sealed partial class MainWindow : Window
 
     void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
     {
-        if (_closed || !_immersive || !args.DidPresenterChange) return;
+        if (_closed) return;
+
+        if (!_immersive)
+        {
+            if (_shellRestorePending &&
+                (args.DidPresenterChange || args.DidSizeChange || args.DidPositionChange))
+                QueueShellLayoutRefresh();
+            return;
+        }
+
+        if (!args.DidPresenterChange) return;
 
         WindowFrameStyle.SetImmersive(this, true, _immersiveBorderless);
         // AppWindow presenter transitions finish asynchronously. Reapply on the next
@@ -189,34 +213,77 @@ public sealed partial class MainWindow : Window
         });
     }
 
+    void QueueShellLayoutRefresh()
+    {
+        if (_closed || _immersive) return;
+
+        _shellRestorePending = true;
+        var generation = ++_shellLayoutRefreshGeneration;
+
+        // Presenter restoration emits presenter, position, and size notifications on
+        // separate turns. Only the newest queued refresh may reveal the shell.
+        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (_closed || _immersive || generation != _shellLayoutRefreshGeneration) return;
+            ApplyNavigationPaneState();
+
+            // Give NavigationView one turn to rebuild its template at the restored
+            // window width, then arrange the compact rail and content together.
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+                () => CompleteShellLayoutRefresh(generation));
+        });
+    }
+
+    void CompleteShellLayoutRefresh(int generation)
+    {
+        if (_closed || _immersive || generation != _shellLayoutRefreshGeneration) return;
+
+        try
+        {
+            RootGrid.InvalidateMeasure();
+            RootGrid.InvalidateArrange();
+            Nav.InvalidateMeasure();
+            Nav.InvalidateArrange();
+            PageHost.InvalidateMeasure();
+            PageHost.InvalidateArrange();
+            foreach (var item in Nav.MenuItems.OfType<NavigationViewItem>())
+            {
+                item.InvalidateMeasure();
+                item.InvalidateArrange();
+            }
+            RootGrid.UpdateLayout();
+        }
+        finally
+        {
+            if (generation == _shellLayoutRefreshGeneration)
+                _shellRestorePending = false;
+        }
+    }
+
     public void SetNavigationPaneOpen(bool open)
     {
         _navigationPaneOpen = open;
         Setting.Put("nav_pane_user_open", open);
-        if (_immersive)
-        {
-            _paneOpenBeforeImmersive = open;
-            return;
-        }
-        Nav.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
-        Nav.CompactPaneLength = CompactPaneWidth;
-        Nav.IsPaneVisible = true;
-        Nav.IsPaneOpen = open;
+        ApplyNavigationPaneState();
     }
 
-    void RestoreNavigationPaneVisualState()
+    void OnNavigationViewLoaded(object sender, RoutedEventArgs e)
+    {
+        // NavigationView applies template defaults during its first measure. Reapply
+        // the persisted preference so a collapsed cold start stays collapsed.
+        ApplyNavigationPaneState();
+    }
+
+    void ApplyNavigationPaneState()
     {
         if (_immersive) return;
 
-        // Left keeps the compact rail in layout; LeftCompact opens over the page and
-        // can leave the rail visually covering playback after a presenter transition.
-        // Update the hidden template first so no intermediate open state is painted.
-        Nav.IsPaneVisible = false;
-        Nav.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
+        // The pane mode is authoritative as well as IsPaneOpen. Left can otherwise
+        // reopen while its template is recreated after a presenter transition.
+        Nav.PaneDisplayMode = _navigationPaneOpen
+            ? NavigationViewPaneDisplayMode.Left
+            : NavigationViewPaneDisplayMode.LeftCompact;
         Nav.CompactPaneLength = CompactPaneWidth;
-        Nav.UpdateLayout();
-        Nav.IsPaneOpen = _navigationPaneOpen;
-        Nav.UpdateLayout();
         Nav.IsPaneVisible = true;
         Nav.IsPaneOpen = _navigationPaneOpen;
     }

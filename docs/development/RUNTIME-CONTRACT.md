@@ -5,15 +5,49 @@
 
 ## 1. 运行时目录
 
+- 程序入口：安装或便携目录根部的 `TVBox.exe` apphost
+- 托管应用：`libs\TVBox.dll`、`libs\TVBox.deps.json`、`libs\TVBox.runtimeconfig.json`
+- 私有 .NET：`runtime\host\fxr`、`runtime\shared\Microsoft.NETCore.App`、`runtime\shared\Microsoft.WindowsDesktop.App`
+- 发布包内置 Node：根目录 `node`
+- 应用资源：根目录 `assets\icons` 与 `assets\js`
+- 发布包 FFmpeg：根目录 `ffmpeg`
+- 多语言资源：`locales\winui`；两个带 MUI 的 WinUI 模块与所选语言资源保持相邻，`libs` 不保留镜像副本
 - 应用数据：`%LOCALAPPDATA%\TVBox for Windows`
 - Node 脚本缓存：`%LOCALAPPDATA%\TVBox for Windows\node\index.js`
 - JS 模块缓存：`%LOCALAPPDATA%\TVBox for Windows\js`
 - 本地文件：`%LOCALAPPDATA%\TVBox for Windows\local`
-- 发布包内置 Node：`app\Assets\node\node.exe`
-- 发布包 FFmpeg：`app\ffmpeg\*.dll`
 - 应用本地服务：`http://127.0.0.1:9978` 起逐端口探测
 
-启动时会后台删除旧版本遗留的 `runtime`、`jar`、`py`、`pyenv` 目录。
+发布目录结构固定如下：
+
+```text
+TVBox/
+|-- TVBox.exe
+|-- assets/
+|   |-- icons/
+|   `-- js/
+|-- ffmpeg/
+|-- libs/
+|   |-- TVBox.dll
+|   |-- TVBox.deps.json
+|   `-- TVBox.runtimeconfig.json
+|-- locales/
+|   `-- winui/
+|       |-- en-us/ ja-JP/ ko-KR/ zh-CN/ zh-TW/
+|       |-- Microsoft.ui.xaml.dll
+|       `-- Microsoft.UI.Xaml.Phone.dll
+|-- node/
+|-- runtime/
+|   |-- host/fxr/<version>/hostfxr.dll
+|   |-- shared/Microsoft.NETCore.App/<version>/
+|   `-- shared/Microsoft.WindowsDesktop.App/<version>/
+|-- README.md
+`-- THIRD-PARTY-NOTICES.md
+```
+
+程序目录内必须恰好只有一个 `TVBox.exe`，且禁止单文件发布。apphost 的 `AppBinaryName` 为 `libs\TVBox.dll`；`AppRelativeDotNet` 是相对托管入口目录解析，因此必须为 `..\runtime`，不能写成 `runtime`。后者会错误查找 `libs\runtime`，即使系统已经安装 Desktop Runtime 也会因 apphost 仅允许 AppRelative 查找而继续报缺少运行时。结构化发布还必须同步重写 apphost 的免注册 WinRT 清单，并在 `Application.Start` 前把 `libs` 与 `locales\winui` 加入进程原生依赖搜索路径。
+
+`runtime` 是标准且只读的私有 dotnet-root，不是平铺的 self-contained publish 输出；应用本身使用 framework-dependent publish，并由随包 Core/Desktop runtime packs 提供运行时。任何程序载荷目录都不得写入缓存、设置或其他用户状态，也不得在启动时作为旧缓存删除。发布包本身保持无状态；所有用户设置、视频源、直播源、历史、收藏、日志与缓存均位于 `%LOCALAPPDATA%\TVBox for Windows`，正常升级和卸载默认保留该目录。
 
 ## 2. Node 服务型配置源
 

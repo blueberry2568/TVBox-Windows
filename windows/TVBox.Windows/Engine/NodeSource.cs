@@ -10,6 +10,9 @@ namespace TVBoxForWindows.Engine;
 public static class NodeSource
 {
     const string Tag = "NodeSource";
+    static readonly object SnapshotSync = new();
+    static string _snapshotBaseUrl;
+    static string _snapshotFingerprint;
 
     public static bool MaybeNode(string url) =>
         HasSuffix(url, ".js.md5") || HasSuffix(url, ".js");
@@ -53,6 +56,7 @@ public static class NodeSource
                 throw new Exception("Node 源配置请求失败: HTTP " + rsp.Code);
             var flat = Flatten(rsp.Text(), baseUrl);
             if (flat == null) throw new Exception("Node 源返回的配置无法解析");
+            RememberSnapshot(baseUrl, rsp.Body);
             Logger.D(Tag, "CatPawOpen 源加载成功: " + baseUrl);
             return flat;
         }
@@ -158,6 +162,24 @@ public static class NodeSource
 
     static string Hash(byte[] bytes) =>
         Convert.ToHexString(MD5.HashData(bytes ?? Array.Empty<byte>())).ToLowerInvariant();
+
+    static void RememberSnapshot(string baseUrl, byte[] bytes)
+    {
+        var fingerprint = Convert.ToHexString(SHA256.HashData(bytes ?? Array.Empty<byte>()));
+        lock (SnapshotSync)
+        {
+            _snapshotBaseUrl = baseUrl;
+            _snapshotFingerprint = fingerprint;
+        }
+    }
+
+    internal static string GetSnapshotFingerprint(string baseUrl)
+    {
+        lock (SnapshotSync)
+            return string.Equals(_snapshotBaseUrl, baseUrl, StringComparison.OrdinalIgnoreCase)
+                ? _snapshotFingerprint
+                : null;
+    }
 
     static string FileHash(string path)
     {

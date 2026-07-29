@@ -35,8 +35,16 @@ public static class VodActionRouter
         {
             // CatPaw advertises a LAN address, but the Windows bootstrap intentionally binds
             // to loopback. Always open the reachable local website for an in-app click.
-            var website = NodeRuntime.BaseUrl?.TrimEnd('/') + "/website";
-            return await OpenAsync(website, "配置中心地址无效或系统无法打开默认浏览器");
+            var baseUrl = NodeRuntime.BaseUrl;
+            var configUrl = VodConfigService.Instance.Config?.Url;
+            var website = baseUrl?.TrimEnd('/') + "/website";
+            var watching = NodeConfigChangeMonitor.Start(
+                baseUrl,
+                NodeSource.GetSnapshotFingerprint(baseUrl),
+                () => ReloadNodeConfigAsync(baseUrl, configUrl));
+            var launchResult = await OpenAsync(website, "配置中心地址无效或系统无法打开默认浏览器");
+            if (watching && !string.IsNullOrEmpty(launchResult.Message)) NodeConfigChangeMonitor.Stop();
+            return launchResult;
         }
         if (IsLegacyConfigCenter(title, remark, action))
         {
@@ -85,6 +93,26 @@ public static class VodActionRouter
     static bool IsHttp(string value) =>
         Uri.TryCreate(value?.Trim(), UriKind.Absolute, out var uri) &&
         (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+    static async Task<NodeConfigReloadResult> ReloadNodeConfigAsync(string baseUrl, string configUrl)
+    {
+        if (string.IsNullOrWhiteSpace(configUrl) ||
+            !string.Equals(NodeRuntime.BaseUrl, baseUrl, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(VodConfigService.Instance.Config?.Url, configUrl, StringComparison.OrdinalIgnoreCase))
+            return NodeConfigReloadResult.Stop();
+
+        try
+        {
+            if (!await VodConfigService.Instance.ReloadCurrentAsync(configUrl).ConfigureAwait(false))
+                return NodeConfigReloadResult.Stop();
+            return NodeConfigReloadResult.Success(NodeSource.GetSnapshotFingerprint(baseUrl));
+        }
+        catch (Exception e)
+        {
+            Logger.E("NodeConfigMonitor", "自动重载点播配置失败: " + e.Message);
+            return NodeConfigReloadResult.Retry();
+        }
+    }
 
     static async Task<ActionRouteResult> OpenAsync(string value, string error)
     {

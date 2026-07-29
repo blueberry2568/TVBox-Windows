@@ -21,15 +21,16 @@ public static class Stores
     static string HistoryFile => Path.Combine(AppPaths.Root, "history.json");
     static string KeepFile => Path.Combine(AppPaths.Root, "keep.json");
 
-    static List<T> Load<T>(string file)
-    {
-        try { return File.Exists(file) ? JsonUtil.Deserialize<List<T>>(File.ReadAllText(file)) ?? new() : new(); }
-        catch { return new(); }
-    }
+    static List<T> Load<T>(string file) => DurableJsonFile.Read(
+        file,
+        json => JsonUtil.Deserialize<List<T>>(json),
+        () => new List<T>());
 
     static void Save<T>(string file, List<T> list)
     {
-        try { File.WriteAllText(file, JsonUtil.Serialize(list)); } catch { }
+        // Every caller holds Lock. Serialize a stable list snapshot before the
+        // atomic replacement so an interrupted write cannot truncate live data.
+        DurableJsonFile.Write(file, JsonUtil.Serialize(list.ToList()));
     }
 
     // ---------- Config ----------

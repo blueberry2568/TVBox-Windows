@@ -23,7 +23,7 @@ TVBox for Windows 是 [FongMi/TV](https://github.com/FongMi/TV) 的 Windows 桌�
 - 支持 Direct3D 的显卡及较新的显卡驱动
 - 加载在线配置、海报、字幕和媒体时需要网络连接
 
-发布包为自包含应用，正常情况下无需单独安装 .NET Runtime。不同来源和编码格式仍可能受网络、服务端限制、显卡驱动或 FFmpeg 能力影响。
+发布包内置私有 .NET Desktop Runtime，启动时不会依赖或检测系统全局安装的 .NET；正常情况下无需另行安装运行时。不同来源和编码格式仍可能受网络、服务端限制、显卡驱动或 FFmpeg 能力影响。
 
 ## 安装与运行
 
@@ -38,14 +38,42 @@ TVBox for Windows 是 [FongMi/TV](https://github.com/FongMi/TV) 的 Windows 桌�
 1. 下载 x64 便携 ZIP。
 2. 完整解压到可写目录，不要直接在压缩包内运行。
 3. 运行 `TVBox.exe`。
-4. 不要单独移动根目录的 `TVBox.exe`；实际程序和运行库统一位于旁边的 `app` 文件夹。
+4. 保持 `TVBox.exe` 与 `assets`、`ffmpeg`、`libs`、`locales`、`node`、`runtime` 目录的相对位置不变，不要只移动主程序。
 5. 更新时先退出 TVBox，再用新版本替换整个程序目录。
 
-程序数据不写入便携包目录，因此替换程序文件不会自动删除收藏、历史或配置。数据位置见“隐私与本地数据”。
+安装包与便携包使用相同的多文件结构，不采用单文件打包：
+
+```text
+TVBox/
+|-- TVBox.exe
+|-- assets/
+|   |-- icons/
+|   `-- js/
+|-- ffmpeg/
+|-- libs/
+|   |-- TVBox.dll
+|   |-- TVBox.deps.json
+|   `-- TVBox.runtimeconfig.json
+|-- locales/
+|   `-- winui/
+|       |-- en-us/ ja-JP/ ko-KR/ zh-CN/ zh-TW/
+|       |-- Microsoft.ui.xaml.dll
+|       `-- Microsoft.UI.Xaml.Phone.dll
+|-- node/
+|-- runtime/
+|   |-- host/fxr/
+|   `-- shared/
+|-- README.md
+`-- THIRD-PARTY-NOTICES.md
+```
+
+根目录的 `TVBox.exe` 是唯一应用入口，并通过 `libs\TVBox.dll` 启动托管程序。`runtime` 是标准私有 dotnet-root，包含 `host\fxr`、`Microsoft.NETCore.App` 和 `Microsoft.WindowsDesktop.App`；因此不会因系统未安装、安装错架构或全局运行时检测异常而拒绝启动。WinUI 的两个本地化模块和中英日韩、繁中 MUI 资源统一放在 `locales\winui`，`libs` 不再保留重复的语言目录。
+
+发布文件本身不包含视频源、直播源、设置、收藏、历史、日志或其他用户状态。运行数据只写入 `%LOCALAPPDATA%\TVBox for Windows`，替换程序文件或正常升级时会保留；数据位置及清理方式见“隐私与本地数据”。
 
 ## 添加配置
 
-首次运行且尚未添加点播源时，应用会显示不可跳过的初始源配置：点播配置必填，直播配置可选。点播源加载成功后导航才会解锁；后续可在“设置”中添加、切换或重载配置。配置中心在外部浏览器修改并发出刷新通知时，应用也会重新加载当前配置。
+首次运行且尚未添加点播源时，应用会显示不可跳过的初始源配置：点播配置必填，直播配置可选。点播源加载成功后导航才会解锁；后续可在“设置”中添加、切换或重载配置。CatPawOpen 配置中心在外部浏览器保存变更后，应用会自动检测并重新加载当前配置，无需再到“设置”手动重载。
 
 点播配置中的直播列表可直接用于“直播”页面，也可以单独添加直播地址。源站返回 401、403、404、5xx、TLS 错误或超时通常表示远端服务、鉴权、网络或地区限制异常，不代表播放器一定存在故障。
 
@@ -109,10 +137,10 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ### 生成干净便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.2
+.\scripts\Publish-Portable.ps1 -Version 1.0.3
 ```
 
-输出位于 `artifacts/`，包括发布目录、ZIP 和 `SHA256SUMS.txt`。发布目录顶层仅保留启动器、README、第三方说明和 `app` 运行目录。脚本会校验根启动器、真实 WinUI 主程序、内置 Node、FFmpeg DLL 等必要文件，并在发现用户数据、凭据 URL、私钥、GitHub Token 或本机用户路径时停止打包。
+输出位于 `artifacts/`，包括发布目录、ZIP 和 `SHA256SUMS.txt`。发布目录采用上述结构：根目录提供唯一的 `TVBox.exe` apphost，`libs` 保存应用与第三方依赖，`runtime` 保存标准私有 .NET 运行时，Node、FFmpeg、资源和语言文件分别归类。脚本会校验 apphost 到 `libs` 和私有运行时的部署契约、目录结构、唯一主程序和版本元数据，并在发现用户数据、凭据 URL、私钥、GitHub Token 或本机用户路径时停止打包。
 
 完整发布检查清单见 [docs/RELEASE.md](docs/RELEASE.md)。
 
@@ -121,7 +149,6 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ```text
 .
 |-- windows/TVBox.Windows/       WinUI 3 应用源码
-|-- launcher/                    便携包与安装目录的根启动器
 |-- docs/development/        架构、行为规格与运行时约定
 |-- docs/RELEASE.md          发布清单
 |-- installer/               WiX MSI 安装包工程

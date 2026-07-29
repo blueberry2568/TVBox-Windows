@@ -96,16 +96,6 @@ internal sealed partial class WindowPresentationManager
         Mode = PlaybackWindowMode.Normal;
         if (ReferenceEquals(_snapshot, snapshot)) _snapshot = null;
         Logger.D("Presentation", $"恢复窗口 presenter={snapshot.PresenterKind}, maximized={snapshot.WasMaximized}");
-
-        // Presenter changes can finish after SetPresenter returns. Reapply the native
-        // placement before the next layout settles so maximized windows never expose
-        // their restored rectangle.
-        _window.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.High, () =>
-        {
-            if (Mode != PlaybackWindowMode.Normal || _snapshot != null) return;
-            try { ApplySnapshot(snapshot); }
-            catch (Exception e) { Logger.E("Presentation", "窗口位置二次校正失败: " + e.Message); }
-        });
     }
 
     void RestorePresenter(Snapshot snapshot)
@@ -205,6 +195,22 @@ internal sealed partial class WindowPresentationManager
     void ApplySnapshot(Snapshot snapshot)
     {
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(_window);
+
+        // SetWindowPlacement exposes the normal rectangle before it applies SW_MAXIMIZE.
+        // Maximize first so playback exits in one visual state, then restore the native
+        // placement so a later system Restore returns to the original normal bounds.
+        if (snapshot.WasMaximized && _window.AppWindow.Presenter is OverlappedPresenter presenter)
+        {
+            presenter.Maximize();
+            if (snapshot.HasPlacement && hwnd != 0)
+            {
+                var maximizedPlacement = snapshot.Placement;
+                maximizedPlacement.Length = (uint)Marshal.SizeOf<WindowPlacement>();
+                _ = SetWindowPlacement(hwnd, ref maximizedPlacement);
+            }
+            return;
+        }
+
         if (snapshot.HasPlacement && hwnd != 0)
         {
             var placement = snapshot.Placement;
@@ -213,8 +219,6 @@ internal sealed partial class WindowPresentationManager
         }
 
         _window.AppWindow.MoveAndResize(snapshot.Bounds);
-        if (snapshot.WasMaximized && _window.AppWindow.Presenter is OverlappedPresenter presenter)
-            presenter.Maximize();
     }
 
     RectInt32 GetCompactBounds(double widthDip, double heightDip)

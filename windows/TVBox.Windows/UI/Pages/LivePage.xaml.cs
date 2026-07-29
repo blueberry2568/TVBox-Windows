@@ -98,8 +98,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
         if (_fullscreen || _compact)
         {
             _fullscreen = _compact = false;
-            try { App.Main.RestorePlaybackWindow(); } catch { }
             ApplyPresentationMode();
+            try { App.Main.RestorePlaybackWindow(); } catch { }
         }
         else App.Main.SetImmersive(false);
         _hostBinding?.Dispose();
@@ -751,11 +751,14 @@ public sealed partial class LivePage : Page, INavigationPlayback
                     ApplyPresentationMode();
                 }
             }
-            else App.Main.RestorePlaybackWindow();
+            else
+            {
+                ApplyPresentationMode();
+                App.Main.RestorePlaybackWindow();
+            }
         }
         catch { }
         if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
-        if (!entering) ApplyPresentationMode();
         ShowPlayerChrome();
         _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
@@ -777,11 +780,14 @@ public sealed partial class LivePage : Page, INavigationPlayback
                     ApplyPresentationMode();
                 }
             }
-            else App.Main.RestorePlaybackWindow();
+            else
+            {
+                ApplyPresentationMode();
+                App.Main.RestorePlaybackWindow();
+            }
         }
         catch { }
         if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
-        if (!entering) ApplyPresentationMode();
         ShowPlayerChrome();
         _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);

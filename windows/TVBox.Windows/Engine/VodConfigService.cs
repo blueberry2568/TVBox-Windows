@@ -45,10 +45,25 @@ public class VodConfigService
     public async Task LoadAsync(ConfigRecord config)
     {
         if (config == null || string.IsNullOrWhiteSpace(config.Url)) throw new Exception("请输入点播配置地址");
+        await LoadCoreAsync(config, null);
+    }
 
+    /// <summary>Reloads only while the expected source is still current.</summary>
+    internal Task<bool> ReloadCurrentAsync(string expectedUrl) => LoadCoreAsync(null, expectedUrl);
+
+    async Task<bool> LoadCoreAsync(ConfigRecord requested, string expectedUrl)
+    {
         await _loadLock.WaitAsync();
         try
         {
+            var config = requested;
+            if (expectedUrl != null)
+            {
+                if (!string.Equals(Config?.Url, expectedUrl, StringComparison.OrdinalIgnoreCase)) return false;
+                config = Config;
+            }
+            if (config == null || string.IsNullOrWhiteSpace(config.Url)) throw new Exception("请输入点播配置地址");
+
             var depots = new List<ConfigRecord>();
             var imports = new List<DepotImport>();
             var resolved = await ResolveConfigAsync(
@@ -72,6 +87,7 @@ public class VodConfigService
         finally { _loadLock.Release(); }
 
         App.Post(() => Loaded?.Invoke());
+        return true;
     }
 
     public async Task LoadLatestAsync()

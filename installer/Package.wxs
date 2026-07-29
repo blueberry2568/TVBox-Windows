@@ -15,13 +15,15 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of TVBox is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <Icon Id="TVBoxIcon.ico" SourceFile="!(bindpath.Publish)\app\Assets\icon.ico" />
+    <Icon Id="TVBoxIcon.ico" SourceFile="!(bindpath.Publish)\assets\icons\icon.ico" />
     <Property Id="ARPPRODUCTICON" Value="TVBoxIcon.ico" />
+    <Property Id="CREATE_DESKTOP_SHORTCUT" Value="1" Secure="yes" />
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
 
     <Feature Id="Complete" Title="TVBox" Level="1">
       <ComponentRef Id="MainExecutable" />
       <ComponentRef Id="StartMenuShortcut" />
+      <ComponentRef Id="DesktopShortcut" />
       <ComponentGroupRef Id="PublishedFiles" />
     </Feature>
 
@@ -31,7 +33,7 @@
       <File Id="TVBoxExe" Source="!(bindpath.Publish)\TVBox.exe" KeyPath="yes" />
     </Component>
 
-    <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder">
+    <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Bitness="always64">
       <Shortcut
         Id="StartMenuShortcutLink"
         Name="TVBox"
@@ -51,6 +53,30 @@
         Value="1"
         KeyPath="yes" />
     </Component>
+
+    <Component
+      Id="DesktopShortcut"
+      Directory="DesktopFolder"
+      Bitness="always64"
+      Condition="CREATE_DESKTOP_SHORTCUT = &quot;1&quot;">
+      <Shortcut
+        Id="DesktopShortcutLink"
+        Name="TVBox"
+        Description="TVBox"
+        Target="[INSTALLFOLDER]TVBox.exe"
+        WorkingDirectory="INSTALLFOLDER"
+        Icon="TVBoxIcon.ico"
+        Advertise="no">
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="TVBox.Windows" />
+      </Shortcut>
+      <RegistryValue
+        Root="HKCU"
+        Key="Software\TVBox for Windows"
+        Name="DesktopShortcut"
+        Type="integer"
+        Value="1"
+        KeyPath="yes" />
+    </Component>
   </Package>
 
   <Fragment>
@@ -60,6 +86,7 @@
     <StandardDirectory Id="ProgramMenuFolder">
       <Directory Id="ApplicationProgramsFolder" Name="TVBox" />
     </StandardDirectory>
+    <StandardDirectory Id="DesktopFolder" />
   </Fragment>
 
   <?foreach WIXUIARCH in X86;X64;A64 ?>
@@ -90,20 +117,47 @@
       <DialogRef Id="ResumeDlg" />
       <DialogRef Id="UserExit" />
 
+      <Dialog Id="ShortcutDlg" Width="370" Height="270" Title="TVBox 安装设置">
+        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="下一步(&amp;N)" />
+        <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="上一步(&amp;B)" />
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="取消">
+          <Publish Event="SpawnDialog" Value="CancelDlg" />
+        </Control>
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="选择要创建的快捷方式" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="快捷方式" />
+        <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
+        <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="373" Height="0" />
+        <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="373" Height="0" />
+        <Control
+          Id="CreateDesktopShortcut"
+          Type="CheckBox"
+          X="25"
+          Y="75"
+          Width="300"
+          Height="17"
+          Property="CREATE_DESKTOP_SHORTCUT"
+          CheckBoxValue="1"
+          Text="创建桌面快捷方式(&amp;D)" />
+        <Control Id="StartMenuNotice" Type="Text" X="25" Y="105" Width="310" Height="30" Text="开始菜单快捷方式将自动创建。" />
+      </Dialog>
+
       <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" />
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
 
       <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
       <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="3" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="4" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ShortcutDlg" Order="4" />
       <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
       <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
 
       <Publish Dialog="BrowseDlg" Control="OK" Event="SetTargetPath" Value="[_BrowseProperty]" Order="3" />
       <Publish Dialog="BrowseDlg" Control="OK" Event="EndDialog" Value="Return" Order="4" />
 
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="ShortcutDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+      <Publish Dialog="ShortcutDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutDlg" Order="1" Condition="NOT Installed" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.0.3 - 2026-07-29
+
+### Fixed
+
+- Made the persisted collapsed navigation mode authoritative at startup and after video or live full-screen transitions.
+- Restored maximized windows directly without briefly showing their previous normal bounds.
+- Fixed the apphost runtime lookup path that incorrectly resolved `runtime` below the managed entry directory and kept reporting a missing .NET Desktop Runtime even after users installed it.
+- Fixed the silent WinUI startup crash by redirecting the embedded registration-free activation manifest to the structured runtime directories before `Application.Start`.
+- Replaced the flat self-contained output with a framework-dependent application in `libs` plus a standard private dotnet-root in `runtime`, so the multi-file release starts without a system .NET installation.
+- Reorganized Node and FFmpeg as root runtime components, grouped icons and JavaScript under `assets`, and added explicit `libs`, `locales`, and `runtime` classifications.
+- Consolidated WinUI language resources under `locales\winui`, retained only Chinese, English, Japanese, and Korean resources, and removed duplicate MUI payload from `libs`.
+- Rebuilt the original blue cube artwork on a polished Apple-style rounded-rectangle application icon without changing the cube itself.
+- Ensured the portable and installed layouts contain exactly one root `TVBox.exe`; single-file publishing remains disabled.
+- Added an installer page for the optional desktop shortcut while retaining the Start menu shortcut and selectable install directory.
+- Synchronized executable, assembly, manifest, package, and local status-page versions.
+- Hardened portable and MSI validation against preferences, sources, history, favorites, logs, dumps, debug symbols, credentials, and other machine-local files.
+- Kept release artifacts stateless while preserving user configuration and history under `%LOCALAPPDATA%\TVBox for Windows` across upgrades.
+- Made VOD/live sources empty and every user-facing switch off for a clean first run.
+- Made settings, source records, history, and favorites crash-safe with serialized atomic writes and backup recovery.
+- Automatically reloads the active CatPawOpen source after its external configuration center saves a stable configuration change.
+
 ## 1.0.2 - 2026-07-29
 
 ### Fixed
