@@ -8,7 +8,7 @@ TVBox for Windows 是 [FongMi/TV](https://github.com/FongMi/TV) 的 Windows 桌�
 
 ## 界面预览
 
-![TVBox for Windows 点播界面](https://raw.githubusercontent.com/blueberry2568/TVBox-Windows/main/docs/images/tvbox-vod.png)
+![TVBox for Windows 点播界面](https://raw.githubusercontent.com/blueberry2568/TVBox-for-Windows/main/docs/images/tvbox-vod.png)
 
 ## 主要功能
 
