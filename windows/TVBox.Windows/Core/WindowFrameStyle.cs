@@ -6,6 +6,7 @@ namespace TVBoxForWindows.Core;
 /// <summary>Keeps the native window frame from showing through the WinUI compositor during playback transitions.</summary>
 internal static partial class WindowFrameStyle
 {
+    const int DwmwaTransitionsForcedDisabled = 3;
     const int DwmwaWindowCornerPreference = 33;
     const int DwmwaBorderColor = 34;
     const int DwmwaCaptionColor = 35;
@@ -27,6 +28,9 @@ internal static partial class WindowFrameStyle
     const int BlackBrush = 4;
 
     const uint WmEraseBackground = 0x0014;
+    const uint WmSystemCommand = 0x0112;
+    const nuint SystemCommandMask = 0xFFF0;
+    const nuint SystemCommandRestore = 0xF120;
     const uint SwpNoSize = 0x0001;
     const uint SwpNoMove = 0x0002;
     const uint SwpNoZOrder = 0x0004;
@@ -47,9 +51,11 @@ internal static partial class WindowFrameStyle
     static bool _normalStyleCaptured;
     static bool _borderlessStyleActive;
     static bool _immersive;
+    static Action _beforeSystemRestore;
 
-    public static void Attach(Window window)
+    public static void Attach(Window window, Action beforeSystemRestore = null)
     {
+        if (beforeSystemRestore != null) _beforeSystemRestore = beforeSystemRestore;
         if (_subclassAttached) return;
         var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
         if (hwnd == 0) return;
@@ -65,6 +71,7 @@ internal static partial class WindowFrameStyle
         try
         {
             var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            SetTransitionsDisabled(window, false);
             RestoreBorderlessStyle(hwnd);
             SetResizeBackground(hwnd, false);
             if (_subclassAttached) _ = RemoveWindowSubclass(hwnd, WindowSubclassProc, SubclassId);
@@ -77,6 +84,22 @@ internal static partial class WindowFrameStyle
             _backgroundCaptured = false;
             _normalStyleCaptured = false;
             _immersive = false;
+            _beforeSystemRestore = null;
+        }
+    }
+
+    public static void SetTransitionsDisabled(Window window, bool disabled)
+    {
+        try
+        {
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            if (hwnd == 0) return;
+            var value = disabled ? 1 : 0;
+            _ = DwmSetWindowAttributeInt(hwnd, DwmwaTransitionsForcedDisabled, ref value, sizeof(int));
+        }
+        catch
+        {
+            // DWM transition control is best-effort on older Windows builds.
         }
     }
 
@@ -91,14 +114,15 @@ internal static partial class WindowFrameStyle
 
             // WM_ERASEBKGND covers the interval in which WinUI has accepted a resize
             // but its composition surface has not produced the next frame yet.
+            var useBorderlessFrame = immersive && borderless;
             SetResizeBackground(hwnd, immersive);
-            SetDwmFrame(hwnd, immersive);
-            SetBorderlessStyle(hwnd, immersive && borderless);
+            SetDwmFrame(hwnd, immersive, useBorderlessFrame);
+            SetBorderlessStyle(hwnd, useBorderlessFrame);
             if (!immersive) _normalStyleCaptured = false;
 
             // Changing the presenter/style can recreate the non-client frame. Apply
             // the DWM colors once more after SWP_FRAMECHANGED and request a repaint.
-            SetDwmFrame(hwnd, immersive);
+            SetDwmFrame(hwnd, immersive, useBorderlessFrame);
             _ = RedrawWindow(hwnd, 0, 0, RdwInvalidate | RdwErase | RdwFrame);
         }
         catch
@@ -107,13 +131,13 @@ internal static partial class WindowFrameStyle
         }
     }
 
-    static void SetDwmFrame(nint hwnd, bool immersive)
+    static void SetDwmFrame(nint hwnd, bool immersive, bool borderless)
     {
         var color = immersive ? DwmColorBlack : DwmColorDefault;
         _ = DwmSetWindowAttributeColor(hwnd, DwmwaBorderColor, ref color, sizeof(uint));
         _ = DwmSetWindowAttributeColor(hwnd, DwmwaCaptionColor, ref color, sizeof(uint));
 
-        var corner = immersive ? DwmWindowCornerPreferenceDoNotRound : DwmWindowCornerPreferenceDefault;
+        var corner = borderless ? DwmWindowCornerPreferenceDoNotRound : DwmWindowCornerPreferenceDefault;
         _ = DwmSetWindowAttributeInt(hwnd, DwmwaWindowCornerPreference, ref corner, sizeof(int));
     }
 
@@ -183,6 +207,17 @@ internal static partial class WindowFrameStyle
         nuint subclassId,
         nuint referenceData)
     {
+        if (hwnd == _hwnd &&
+            message == WmSystemCommand &&
+            ((nuint)wParam & SystemCommandMask) == SystemCommandRestore)
+        {
+            // WINDOWPLACEMENT is shared by every presenter attached to this HWND.
+            // Repair its normal bounds before DefSubclassProc handles SC_RESTORE so
+            // Windows never has a chance to reveal the former compact dimensions.
+            try { _beforeSystemRestore?.Invoke(); }
+            catch { }
+        }
+
         if (_immersive && hwnd == _hwnd && message == WmEraseBackground && wParam != 0)
         {
             if (GetClientRect(hwnd, out var rect))

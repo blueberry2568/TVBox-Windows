@@ -74,22 +74,50 @@
                         IsTitleBarAutoPaddingEnabled="False"
                         IsBackButtonVisible="Collapsed"
                         IsSettingsVisible="True"
+                        UseLayoutRounding="True"
                         ItemInvoked="OnNavInvoked">
+            <NavigationView.Resources>
+                <!-- Font glyphs can extend beyond their advance box and lose edge
+                     pixels while NavigationView is remeasured after presenter changes.
+                     These fixed-viewbox vector icons keep a safe inset on every edge. -->
+                <Style x:Key="NavigationRailIconStyle" TargetType="PathIcon">
+                    <Setter Property="Width" Value="20"/>
+                    <Setter Property="Height" Value="20"/>
+                    <Setter Property="UseLayoutRounding" Value="True"/>
+                    <Setter Property="HorizontalAlignment" Value="Center"/>
+                    <Setter Property="VerticalAlignment" Value="Center"/>
+                </Style>
+            </NavigationView.Resources>
             <NavigationView.MenuItems>
                 <NavigationViewItem Content="点播" Tag="vod">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE714;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon>
+                        <PathIcon Style="{StaticResource NavigationRailIconStyle}"
+                                  Data="M5,4 C3.34315,4 2,5.34315 2,7 L2,13 C2,14.6569 3.34315,16 5,16 L10,16 C11.6569,16 13,14.6569 13,13 L13,12.6787 16.0372,14.7759 C16.8664,15.3484 17.9975,14.7549 17.9975,13.7473 L17.9975,6.25215 C17.9975,5.24453 16.8664,4.65101 16.0372,5.22353 L13,7.32067 13,7 C13,5.34315 11.6569,4 10,4 Z M13,8.53588 L16.6054,6.04643 C16.7712,5.93193 16.9975,6.05063 16.9975,6.25215 L16.9975,13.7473 C16.9975,13.9488 16.7712,14.0675 16.6054,13.953 L13,11.4635 Z M3,7 C3,5.89543 3.89543,5 5,5 L10,5 C11.1046,5 12,5.89543 12,7 L12,13 C12,14.1046 11.1046,15 10,15 L5,15 C3.89543,15 3,14.1046 3,13 Z"/>
+                    </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="直播" Tag="live">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE7F4;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon>
+                        <PathIcon Style="{StaticResource NavigationRailIconStyle}"
+                                  Data="M2,6 C2,4.89543 2.89543,4 4,4 L16,4 C17.1046,4 18,4.89543 18,6 L18,13 C18,14.1046 17.1046,15 16,15 L4,15 C2.89543,15 2,14.1046 2,13 Z M4,5 C3.44772,5 3,5.44772 3,6 L3,13 C3,13.5523 3.44772,14 4,14 L16,14 C16.5523,14 17,13.5523 17,13 L17,6 C17,5.44772 16.5523,5 16,5 Z M5,16.5 C5,16.2239 5.22386,16 5.5,16 L14.5,16 C14.7761,16 15,16.2239 15,16.5 C15,16.7761 14.7761,17 14.5,17 L5.5,17 C5.22386,17 5,16.7761 5,16.5 Z"/>
+                    </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="搜索" Tag="search">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE721;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon>
+                        <PathIcon Style="{StaticResource NavigationRailIconStyle}"
+                                  Data="M13.7291,14.4362 C12.5924,15.411 11.115,16 9.5,16 C5.91015,16 3,13.0899 3,9.5 C3,5.91015 5.91015,3 9.5,3 C13.0899,3 16,5.91015 16,9.5 C16,11.115 15.411,12.5924 14.4361,13.7292 L17.8535,17.1465 C18.0487,17.3417 18.0487,17.6583 17.8535,17.8536 C17.6799,18.0271 17.4105,18.0464 17.2156,17.9114 L17.1464,17.8536 Z M13.0196,13.7266 C13.276,13.5128 13.5127,13.2761 13.7265,13.0197 C14.5216,12.0659 15,10.8388 15,9.5 C15,6.46243 12.5376,4 9.5,4 C6.46243,4 4,6.46243 4,9.5 C4,12.5376 6.46243,15 9.5,15 C10.8388,15 12.0658,14.5217 13.0196,13.7266 Z"/>
+                    </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="收藏" Tag="keep">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE734;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon>
+                        <PathIcon Style="{StaticResource NavigationRailIconStyle}"
+                                  Data="M9.10433,2.89923 C9.47114,2.15598 10.531,2.15599 10.8978,2.89923 L12.8282,6.81073 17.1448,7.43797 C17.9651,7.55715 18.2926,8.56513 17.699,9.14366 L14.5755,12.1883 15.3129,16.4875 C15.453,17.3044 14.5956,17.9274 13.8619,17.5417 L10.0011,15.5119 6.14018,17.5417 C5.40655,17.9274 4.54913,17.3044 4.68924,16.4875 L5.4266,12.1883 2.30308,9.14366 C1.70956,8.56512 2.03708,7.55715 2.8573,7.43797 L7.17389,6.81073 Z M10.0011,3.3418 L8.07062,7.25329 C7.92496,7.54844 7.6434,7.75301 7.31769,7.80034 L3.00109,8.42757 6.12461,11.4722 C6.3603,11.702 6.46784,12.033 6.41221,12.3574 L5.67484,16.6565 9.53572,14.6267 C9.82705,14.4736 10.1751,14.4736 10.4664,14.6267 L14.3273,16.6565 13.5899,12.3574 C13.5343,12.033 13.6418,11.702 13.8775,11.4722 L17.001,8.42757 12.6844,7.80034 C12.3587,7.75301 12.0772,7.54844 11.9315,7.25329 Z"/>
+                    </NavigationViewItem.Icon>
                 </NavigationViewItem>
                 <NavigationViewItem Content="历史" Tag="history">
-                    <NavigationViewItem.Icon><FontIcon Glyph="&#xE81C;" FontSize="20" Width="24" Height="24" IsTextScaleFactorEnabled="False"/></NavigationViewItem.Icon>
+                    <NavigationViewItem.Icon>
+                        <PathIcon Style="{StaticResource NavigationRailIconStyle}"
+                                  Data="M10,4 C13.3137,4 16,6.68629 16,10 C16,13.3137 13.3137,16 10,16 C6.68629,16 4,13.3137 4,10 C4,9.84443 4.00591,9.69034 4.0175,9.53793 C4.03845,9.26258 3.83222,9.02239 3.55687,9.00144 C3.28152,8.98049 3.04133,9.18673 3.02038,9.46207 C3.00687,9.6397 3,9.8191 3,10 C3,13.866 6.13401,17 10,17 C13.866,17 17,13.866 17,10 C17,6.13401 13.866,3 10,3 C8.04094,3 6.27012,3.80499 5,5.10109 L5,3.5 C5,3.22386 4.77614,3 4.5,3 C4.22386,3 4,3.22386 4,3.5 L4,6.5 C4,6.77614 4.22386,7 4.5,7 L7.5,7 C7.77614,7 8,6.77614 8,6.5 C8,6.22386 7.77614,6 7.5,6 L5.52772,6 C6.62683,4.77191 8.2234,4 10,4 Z M10,6.5 C10,6.22386 9.77614,6 9.5,6 C9.22386,6 9,6.22386 9,6.5 L9,10.5 C9,10.7761 9.22386,11 9.5,11 L12.5,11 C12.7761,11 13,10.7761 13,10.5 C13,10.2239 12.7761,10 12.5,10 L10,10 Z"/>
+                    </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <Grid x:Name="PageHost">

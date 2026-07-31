@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Nodes;
 using TVBoxForWindows.Core;
 using TVBoxForWindows.Engine;
@@ -125,7 +123,7 @@ public class LiveConfigService
     static async Task<string> LoadDecoded(string target)
     {
         var scheme = UrlUtil.Scheme(target);
-        if (scheme is "http" or "https") return await Core.Decoder.GetJson(target);
+        if (scheme is "http" or "https") return await Core.Decoder.GetJson(target, allowPlainText: true);
         var text = await HttpUtil.Load(target);
         if (string.IsNullOrWhiteSpace(text)) throw new Exception("直播源内容为空或无法读取");
         return Core.Decoder.Verify(target, text);
@@ -134,33 +132,11 @@ public class LiveConfigService
     /// <summary>Reads CatPawOpen's companion config without starting or replacing the active Node runtime.</summary>
     static async Task<List<Models.Live>> TryLoadCatPawLives(string sourceUrl)
     {
-        var explicitManifest = HasSuffix(sourceUrl, ".js.md5");
-        var jsUrl = explicitManifest ? ReplaceSuffix(sourceUrl, ".js.md5", ".js") : sourceUrl;
-        if (!HasSuffix(jsUrl, ".js")) return null;
-        var configUrl = ReplaceSuffix(jsUrl, ".js", ".config.js");
-        var md5Url = ReplaceSuffix(configUrl, ".js", ".js.md5");
-
-        var md5Rsp = await Get(configUrl: md5Url);
-        if (md5Rsp.Code is < 200 or >= 300)
-        {
-            if (!explicitManifest) return null;
-            throw new Exception("CatPawOpen 伴随配置校验文件下载失败: HTTP " + md5Rsp.Code);
-        }
-        var expected = md5Rsp.Text().Trim().Split((char[])null, StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        if (expected?.Length != 32 || expected.Any(c => !Uri.IsHexDigit(c)))
-            throw new Exception("CatPawOpen 伴随配置校验文件不是有效的 MD5");
-
-        var configRsp = await Get(configUrl);
-        if (configRsp.Code is < 200 or >= 300)
-            throw new Exception("CatPawOpen 伴随配置下载失败: HTTP " + configRsp.Code);
-        var bytes = configRsp.Body ?? Array.Empty<byte>();
-        var actual = Convert.ToHexString(MD5.HashData(bytes)).ToLowerInvariant();
-        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-            throw new Exception("CatPawOpen 伴随配置 MD5 校验失败");
-
-        var node = ParseCompanionJs(Encoding.UTF8.GetString(bytes));
+        var companion = await NodeSource.TryLoadCompanionAsync(sourceUrl);
+        if (companion == null) return null;
+        var node = ParseCompanionJs(companion.Value.Script);
         if (node == null) throw new Exception("CatPawOpen 伴随配置无法解析");
-        var lives = ExtractLives(node, configUrl);
+        var lives = ExtractLives(node, companion.Value.Url);
         return lives.Count > 0 ? lives : await TryLoadCatPawNodeLives(sourceUrl);
     }
 
@@ -331,12 +307,6 @@ public class LiveConfigService
         !string.IsNullOrWhiteSpace(first) && !string.IsNullOrWhiteSpace(second) &&
         string.Equals(UrlUtil.Convert(first.Trim()), UrlUtil.Convert(second.Trim()), StringComparison.OrdinalIgnoreCase);
 
-    static async Task<OkResponse> Get(string configUrl)
-    {
-        var target = RequestTarget.Create(configUrl);
-        return await HttpUtil.Get(target.Url, target.Headers, timeoutMs: 30000);
-    }
-
     static List<Models.Live> ExtractLives(JsonNode node, string baseUrl)
     {
         var result = new List<Models.Live>();
@@ -453,46 +423,6 @@ public class LiveConfigService
         Lives = lives ?? new();
         var boot = Lives.LastOrDefault(live => live.Boot);
         Home = Lives.FirstOrDefault(live => live.Name == config.Home) ?? boot ?? Lives.FirstOrDefault() ?? new Models.Live();
-    }
-
-    static bool HasSuffix(string value, string suffix)
-    {
-        var end = SuffixEnd(value);
-        return end >= suffix.Length &&
-               string.Equals(value.Substring(end - suffix.Length, suffix.Length), suffix, StringComparison.OrdinalIgnoreCase);
-    }
-
-    static string ReplaceSuffix(string value, string suffix, string replacement)
-    {
-        var end = SuffixEnd(value);
-        return value[..(end - suffix.Length)] + replacement + value[end..];
-    }
-
-    static int SuffixEnd(string value)
-    {
-        value ??= "";
-        var query = value.IndexOf('?');
-        var fragment = value.IndexOf('#');
-        if (query < 0) return fragment < 0 ? value.Length : fragment;
-        if (fragment < 0) return query;
-        return Math.Min(query, fragment);
-    }
-
-    readonly record struct RequestTarget(string Url, Dictionary<string, string> Headers)
-    {
-        public static RequestTarget Create(string value)
-        {
-            if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || string.IsNullOrEmpty(uri.UserInfo))
-                return new(value, null);
-            var parts = uri.UserInfo.Split(':', 2);
-            var token = Convert.ToBase64String(Encoding.UTF8.GetBytes(
-                Uri.UnescapeDataString(parts[0]) + ":" + (parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "")));
-            var builder = new UriBuilder(uri) { UserName = "", Password = "" };
-            return new(builder.Uri.AbsoluteUri, new(StringComparer.OrdinalIgnoreCase)
-            {
-                ["Authorization"] = "Basic " + token,
-            });
-        }
     }
 
     public void SetHome(Models.Live live)

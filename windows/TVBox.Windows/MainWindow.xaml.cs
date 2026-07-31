@@ -5,11 +5,14 @@ using TVBoxForWindows.Models;
 using TVBoxForWindows.Server;
 using TVBoxForWindows.UI;
 using TVBoxForWindows.UI.Pages;
+using System.Numerics;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Storage.Streams;
@@ -21,7 +24,12 @@ public sealed partial class MainWindow : Window
 {
     const double TitleBarHeight = 52;
     const double CompactPaneWidth = 48;
+    const int ShellLayoutSettleDelayMs = 160;
+    const int PlaybackWindowSettleDelayMs = 120;
+    const int PlaybackContentFadeDurationMs = 160;
     readonly WindowPresentationManager _presentation;
+    Microsoft.UI.Dispatching.DispatcherQueueTimer _shellLayoutRefreshTimer;
+    Microsoft.UI.Dispatching.DispatcherQueueTimer _playbackWindowTransitionTimer;
     bool _immersive;
     bool _immersiveBorderless;
     bool _navigationPaneOpen;
@@ -32,12 +40,13 @@ public sealed partial class MainWindow : Window
     bool _sourceSetupLoading;
     string _activeSection = "vod";
     string _loadedVodConfigUrl;
+    Task _initialVodRestoreTask = Task.CompletedTask;
 
     public MainWindow()
     {
         InitializeComponent();
         _presentation = new WindowPresentationManager(this);
-        WindowFrameStyle.Attach(this);
+        WindowFrameStyle.Attach(this, _presentation.PrepareSystemRestore);
         Title = "TVBox";
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
@@ -64,8 +73,11 @@ public sealed partial class MainWindow : Window
             _closed = true;
             VodConfigService.Instance.Loaded -= OnConfigLoaded;
             AppWindow.Changed -= OnAppWindowChanged;
+            StopShellLayoutRefreshStabilizer();
+            StopPlaybackWindowTransition(true);
             UnhookServer();
             LocalServer.Instance.Stop();
+            _presentation.Dispose();
             WindowFrameStyle.Detach(this);
             SpiderRuntime.TerminateForExit();
             Logger.Shutdown();
@@ -115,6 +127,7 @@ public sealed partial class MainWindow : Window
         {
             _shellRestorePending = false;
             _shellLayoutRefreshGeneration++;
+            StopShellLayoutRefreshStabilizer();
             // Close while hidden so an expanded pane cannot be painted for one frame
             // when the shell is restored after a presenter transition.
             Nav.IsPaneOpen = false;
@@ -138,8 +151,15 @@ public sealed partial class MainWindow : Window
 
     public bool IsNavigationPaneOpen => _navigationPaneOpen;
 
+    /// <summary>
+    /// Completes after the persisted video source has either been restored or
+    /// downgraded to the non-blocking refresh warning.
+    /// </summary>
+    public Task InitialVodRestoreTask => _initialVodRestoreTask;
+
     public bool EnterPlaybackFullScreen()
     {
+        BeginPlaybackWindowTransition();
         try { _presentation.EnterFullScreen(); return true; }
         catch (Exception e)
         {
@@ -147,10 +167,12 @@ public sealed partial class MainWindow : Window
             try { _presentation.Restore(); } catch { }
             return false;
         }
+        finally { CompletePlaybackWindowTransition(); }
     }
 
     public bool EnterPlaybackCompact()
     {
+        BeginPlaybackWindowTransition();
         try { _presentation.EnterCompact(760, 460); return true; }
         catch (Exception e)
         {
@@ -158,12 +180,14 @@ public sealed partial class MainWindow : Window
             try { _presentation.Restore(); } catch { }
             return false;
         }
+        finally { CompletePlaybackWindowTransition(); }
     }
 
     public void BeginCompactDrag() => _presentation.BeginCompactDrag();
 
     public bool RestorePlaybackWindow()
     {
+        BeginPlaybackWindowTransition();
         try
         {
             if (_immersive)
@@ -181,6 +205,91 @@ public sealed partial class MainWindow : Window
             QueueShellLayoutRefresh();
             return false;
         }
+        finally { CompletePlaybackWindowTransition(); }
+    }
+
+    void BeginPlaybackWindowTransition()
+    {
+        StopPlaybackWindowTransition(false);
+        WindowFrameStyle.SetTransitionsDisabled(this, true);
+        try
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(RootGrid);
+            visual.StopAnimation("Opacity");
+            visual.Opacity = 0.9f;
+        }
+        catch { }
+    }
+
+    void CompletePlaybackWindowTransition()
+    {
+        _playbackWindowTransitionTimer ??= DispatcherQueue.CreateTimer();
+        _playbackWindowTransitionTimer.Stop();
+        _playbackWindowTransitionTimer.Interval = TimeSpan.FromMilliseconds(PlaybackWindowSettleDelayMs);
+        _playbackWindowTransitionTimer.IsRepeating = false;
+        _playbackWindowTransitionTimer.Tick -= OnPlaybackWindowTransitionSettled;
+        _playbackWindowTransitionTimer.Tick += OnPlaybackWindowTransitionSettled;
+        _playbackWindowTransitionTimer.Start();
+    }
+
+    void OnPlaybackWindowTransitionSettled(
+        Microsoft.UI.Dispatching.DispatcherQueueTimer sender,
+        object args)
+    {
+        if (!ReferenceEquals(sender, _playbackWindowTransitionTimer)) return;
+        StopPlaybackWindowTransition(false);
+        WindowFrameStyle.SetTransitionsDisabled(this, false);
+        FadeInPlaybackWindowContent();
+    }
+
+    void FadeInPlaybackWindowContent()
+    {
+        try
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(RootGrid);
+            if (!new Windows.UI.ViewManagement.UISettings().AnimationsEnabled)
+            {
+                visual.Opacity = 1;
+                return;
+            }
+
+            var compositor = visual.Compositor;
+            var animation = compositor.CreateScalarKeyFrameAnimation();
+            animation.Duration = TimeSpan.FromMilliseconds(PlaybackContentFadeDurationMs);
+            animation.InsertKeyFrame(
+                0,
+                Math.Clamp(visual.Opacity, 0.9f, 1f),
+                compositor.CreateCubicBezierEasingFunction(
+                    new Vector2(0.2f, 0),
+                    new Vector2(0, 1)));
+            animation.InsertKeyFrame(1, 1);
+            visual.StartAnimation("Opacity", animation);
+        }
+        catch
+        {
+            try { ElementCompositionPreview.GetElementVisual(RootGrid).Opacity = 1; }
+            catch { }
+        }
+    }
+
+    void StopPlaybackWindowTransition(bool resetVisual)
+    {
+        var timer = _playbackWindowTransitionTimer;
+        _playbackWindowTransitionTimer = null;
+        if (timer != null)
+        {
+            timer.Stop();
+            timer.Tick -= OnPlaybackWindowTransitionSettled;
+        }
+        WindowFrameStyle.SetTransitionsDisabled(this, false);
+        if (!resetVisual) return;
+        try
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(RootGrid);
+            visual.StopAnimation("Opacity");
+            visual.Opacity = 1;
+        }
+        catch { }
     }
 
     public void RefreshImmersiveFrame(bool borderless = false)
@@ -219,6 +328,7 @@ public sealed partial class MainWindow : Window
 
         _shellRestorePending = true;
         var generation = ++_shellLayoutRefreshGeneration;
+        StartShellLayoutRefreshStabilizer();
 
         // Presenter restoration emits presenter, position, and size notifications on
         // separate turns. Only the newest queued refresh may reveal the shell.
@@ -226,12 +336,44 @@ public sealed partial class MainWindow : Window
         {
             if (_closed || _immersive || generation != _shellLayoutRefreshGeneration) return;
             ApplyNavigationPaneState();
-
-            // Give NavigationView one turn to rebuild its template at the restored
-            // window width, then arrange the compact rail and content together.
-            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-                () => CompleteShellLayoutRefresh(generation));
         });
+    }
+
+    void StartShellLayoutRefreshStabilizer()
+    {
+        if (_shellLayoutRefreshTimer == null)
+        {
+            _shellLayoutRefreshTimer = DispatcherQueue.CreateTimer();
+            _shellLayoutRefreshTimer.Interval = TimeSpan.FromMilliseconds(ShellLayoutSettleDelayMs);
+            _shellLayoutRefreshTimer.IsRepeating = false;
+            _shellLayoutRefreshTimer.Tick += OnShellLayoutRefreshTick;
+        }
+        else _shellLayoutRefreshTimer.Stop();
+        _shellLayoutRefreshTimer.Start();
+    }
+
+    void OnShellLayoutRefreshTick(
+        Microsoft.UI.Dispatching.DispatcherQueueTimer sender,
+        object args)
+    {
+        if (!ReferenceEquals(sender, _shellLayoutRefreshTimer)) return;
+        var generation = _shellLayoutRefreshGeneration;
+        StopShellLayoutRefreshStabilizer();
+        if (_closed || _immersive)
+            return;
+
+        ApplyNavigationPaneState();
+        CompleteShellLayoutRefresh(generation);
+    }
+
+    void StopShellLayoutRefreshStabilizer()
+    {
+        var timer = _shellLayoutRefreshTimer;
+        _shellLayoutRefreshTimer = null;
+        if (timer == null) return;
+
+        timer.Stop();
+        timer.Tick -= OnShellLayoutRefreshTick;
     }
 
     void CompleteShellLayoutRefresh(int generation)
@@ -250,8 +392,21 @@ public sealed partial class MainWindow : Window
             {
                 item.InvalidateMeasure();
                 item.InvalidateArrange();
+                item.Icon?.InvalidateMeasure();
+                item.Icon?.InvalidateArrange();
+            }
+            if (Nav.SettingsItem is NavigationViewItem settingsItem)
+            {
+                settingsItem.InvalidateMeasure();
+                settingsItem.InvalidateArrange();
+                settingsItem.Icon?.InvalidateMeasure();
+                settingsItem.Icon?.InvalidateArrange();
             }
             RootGrid.UpdateLayout();
+        }
+        catch (Exception e)
+        {
+            Logger.E("ShellLayout", "刷新导航布局失败：" + e.Message);
         }
         finally
         {
@@ -293,18 +448,33 @@ public sealed partial class MainWindow : Window
     void Startup()
     {
         ActivateSection("vod", VodFrame, typeof(VodPage));
-        if (string.IsNullOrEmpty(Setting.ConfigVod)) ShowWelcome(null);
-        else _ = LoadLatestAsync();
+        var config = Stores.ResolveConfig(Setting.ConfigVod, 0);
+        if (config == null)
+        {
+            _initialVodRestoreTask = Task.CompletedTask;
+            ShowWelcome(null);
+            return;
+        }
+
+        // configs.json and prefs.json are recovered independently. If prefs was
+        // missing or damaged, keep using the newest persisted source instead of
+        // treating an existing installation as a first run.
+        if (!string.Equals(Setting.ConfigVod, config.Url, StringComparison.OrdinalIgnoreCase))
+            Setting.ConfigVod = config.Url;
+        _initialVodRestoreTask = LoadLatestAsync(config);
     }
 
-    async Task LoadLatestAsync()
+    async Task LoadLatestAsync(ConfigRecord config)
     {
         try
         {
             SetLoading(true);
-            await VodConfigService.Instance.LoadLatestAsync();
+            await VodConfigService.Instance.LoadAsync(config);
         }
-        catch (Exception e) { if (!_closed) ShowWelcome(e.Message); }
+        catch (Exception e)
+        {
+            if (!_closed) ShowConfiguredLoadFailure(e.Message);
+        }
         finally { if (!_closed) SetLoading(false); }
     }
 
@@ -317,8 +487,25 @@ public sealed partial class MainWindow : Window
             await VodConfigService.Instance.LoadAsync(config);
             if (_sourceSetupRequired) CompleteSourceSetup();
         }
-        catch (Exception e) { if (!_closed) ShowWelcome(e.Message); }
+        catch (Exception e)
+        {
+            if (_closed) return;
+            if (_sourceSetupRequired) ShowWelcome(e.Message);
+            else ShowConfiguredLoadFailure(e.Message);
+        }
         finally { if (!_closed) SetLoading(false); }
+    }
+
+    void ShowConfiguredLoadFailure(string error)
+    {
+        // A saved source is not a first-run state. Keep navigation available and
+        // report refresh failures non-modally; Decoder/NodeSource may already have
+        // restored the last-known-good local snapshot before this point.
+        CompleteSourceSetup();
+        NoticeBar.Title = "配置暂时无法刷新";
+        NoticeBar.Message = "已保留本地配置，可稍后重试。" + error;
+        NoticeBar.Severity = InfoBarSeverity.Warning;
+        NoticeBar.IsOpen = true;
     }
 
     void ShowWelcome(string error)

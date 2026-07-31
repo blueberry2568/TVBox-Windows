@@ -35,10 +35,10 @@ public static class NodeSource
             var sourceDir = Path.Combine(AppPaths.Node, "source-" + SourceKey(jsUrl));
             Directory.CreateDirectory(sourceDir);
 
-            var scriptMd5 = hasManifest
-                ? await ReadMd5Async(url, "订阅校验文件")
-                : null;
             var scriptPath = Path.Combine(sourceDir, "index.js");
+            var scriptMd5 = hasManifest
+                ? await ReadMd5WithCacheFallbackAsync(url, scriptPath, "订阅校验文件")
+                : null;
             var scriptBytes = await ReadFileAsync(jsUrl, scriptPath, scriptMd5, "订阅脚本");
             var scriptText = Encoding.UTF8.GetString(scriptBytes);
             if (!hasManifest && !LooksLikeNode(scriptText)) return null;
@@ -67,15 +67,53 @@ public static class NodeSource
         }
     }
 
+    internal readonly record struct CompanionConfig(string Url, string Script);
+
+    /// <summary>
+    /// Loads a CatPawOpen companion config through the same verified on-disk cache
+    /// used by the Node source loader. Bare .js URLs remain optional because they
+    /// can also be ordinary spider scripts.
+    /// </summary>
+    internal static async Task<CompanionConfig?> TryLoadCompanionAsync(string sourceUrl)
+    {
+        if (!MaybeNode(sourceUrl)) return null;
+        var hasManifest = HasSuffix(sourceUrl, ".js.md5");
+        var jsUrl = hasManifest ? ReplaceSuffix(sourceUrl, ".js.md5", ".js") : sourceUrl;
+        var sourceDir = Path.Combine(AppPaths.Node, "source-" + SourceKey(jsUrl));
+        Directory.CreateDirectory(sourceDir);
+        try
+        {
+            var path = await LoadCompanionConfigAsync(jsUrl, sourceDir);
+            var bytes = ReadExisting(path);
+            if (bytes == null) return null;
+            return new CompanionConfig(ReplaceSuffix(jsUrl, ".js", ".config.js"), Encoding.UTF8.GetString(bytes));
+        }
+        catch when (!hasManifest)
+        {
+            return null;
+        }
+    }
+
     static async Task<string> LoadCompanionConfigAsync(string jsUrl, string sourceDir)
     {
         var configUrl = ReplaceSuffix(jsUrl, ".js", ".config.js");
         var md5Url = ReplaceSuffix(configUrl, ".js", ".js.md5");
-        var md5 = await ReadMd5Async(md5Url, "伴随配置校验文件");
-
         var path = Path.Combine(sourceDir, "index.config.js");
+        var md5 = await ReadMd5WithCacheFallbackAsync(md5Url, path, "伴随配置校验文件");
         await ReadFileAsync(configUrl, path, md5, "伴随配置");
         return path;
+    }
+
+    static async Task<string> ReadMd5WithCacheFallbackAsync(string url, string cachedPath, string label)
+    {
+        try { return await ReadMd5Async(url, label); }
+        catch (Exception error)
+        {
+            var cached = ReadExisting(cachedPath);
+            if (cached == null) throw;
+            Logger.E(Tag, $"{label}刷新失败，已使用本地缓存：{error.Message}");
+            return Hash(cached);
+        }
     }
 
     static async Task<string> ReadMd5Async(string url, string label)
@@ -97,25 +135,35 @@ public static class NodeSource
         var cached = ReadVerified(path, expectedMd5);
         if (cached != null) return cached;
 
-        var rsp = await GetAsync(url, 60000);
-        if (rsp.Code is < 200 or >= 300)
-            throw new Exception($"{label}下载失败: HTTP {rsp.Code}");
-        var bytes = rsp.Body ?? Array.Empty<byte>();
-        if (bytes.Length == 0) throw new Exception(label + "内容为空");
-        if (expectedMd5 != null && !string.Equals(Hash(bytes), expectedMd5, StringComparison.OrdinalIgnoreCase))
-            throw new Exception(label + " MD5 校验失败");
-
-        var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
-            await File.WriteAllBytesAsync(temp, bytes);
-            File.Move(temp, path, true);
+            var rsp = await GetAsync(url, 60000);
+            if (rsp.Code is < 200 or >= 300)
+                throw new Exception($"{label}下载失败: HTTP {rsp.Code}");
+            var bytes = rsp.Body ?? Array.Empty<byte>();
+            if (bytes.Length == 0) throw new Exception(label + "内容为空");
+            if (expectedMd5 != null && !string.Equals(Hash(bytes), expectedMd5, StringComparison.OrdinalIgnoreCase))
+                throw new Exception(label + " MD5 校验失败");
+
+            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            try
+            {
+                await File.WriteAllBytesAsync(temp, bytes);
+                File.Move(temp, path, true);
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
+            return bytes;
         }
-        finally
+        catch (Exception error)
         {
-            try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            cached = ReadExisting(path);
+            if (cached == null) throw;
+            Logger.E(Tag, $"{label}刷新失败，已使用本地缓存：{error.Message}");
+            return cached;
         }
-        return bytes;
     }
 
     static byte[] ReadVerified(string path, string expectedMd5)
@@ -125,6 +173,17 @@ public static class NodeSource
             if (expectedMd5 == null || !File.Exists(path)) return null;
             var bytes = File.ReadAllBytes(path);
             return string.Equals(Hash(bytes), expectedMd5, StringComparison.OrdinalIgnoreCase) ? bytes : null;
+        }
+        catch { return null; }
+    }
+
+    static byte[] ReadExisting(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var bytes = File.ReadAllBytes(path);
+            return bytes.Length == 0 ? null : bytes;
         }
         catch { return null; }
     }

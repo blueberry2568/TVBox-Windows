@@ -265,7 +265,7 @@ public class PlayerArgs { public PlaySession Session; }
 
 ## 6. csproj 包基线（by 集成负责人，勿改版本）
 ```xml
-<PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.251003001" />
+<PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260710003" />
 <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
 <PackageReference Include="Jint" Version="4.14.0" />
 <PackageReference Include="AngleSharp" Version="1.5.2" />

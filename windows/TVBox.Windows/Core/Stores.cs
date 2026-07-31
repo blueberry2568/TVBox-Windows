@@ -69,6 +69,34 @@ public static class Stores
         lock (Lock) return Configs.Where(c => c.Type == type && !string.IsNullOrEmpty(c.Url)).OrderByDescending(c => c.Time).ToList();
     }
 
+    /// <summary>
+    /// Resolves the selected source and falls back to the newest persisted record when
+    /// prefs.json was lost or recovered independently from configs.json.
+    /// </summary>
+    public static ConfigRecord ResolveConfig(string selectedUrl, int type)
+    {
+        selectedUrl = selectedUrl?.Trim() ?? "";
+        lock (Lock)
+        {
+            var persisted = Configs
+                .Where(config => config.Type == type && !string.IsNullOrWhiteSpace(config.Url))
+                .OrderByDescending(config => config.Time)
+                .ToList();
+            if (selectedUrl.Length > 0)
+            {
+                var selected = persisted.FirstOrDefault(config =>
+                    string.Equals(config.Url, selectedUrl, StringComparison.OrdinalIgnoreCase));
+                if (selected != null) return selected;
+
+                // A surviving preference is still useful when configs.json was
+                // recovered independently. When other persisted records exist,
+                // however, the missing entry was most likely deleted by the user.
+                if (persisted.Count == 0) return FindConfig(selectedUrl, type);
+            }
+            return persisted.FirstOrDefault();
+        }
+    }
+
     // ---------- History ----------
     public static List<History> Histories { get { lock (Lock) return _histories ??= Load<History>(HistoryFile); } }
 

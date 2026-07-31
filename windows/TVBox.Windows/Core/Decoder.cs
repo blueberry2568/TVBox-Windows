@@ -10,11 +10,66 @@ public static class Decoder
     static readonly Regex JsUri = new("\"(\\.|\\.\\.)/(.?|.+?)\\.js\\?(.?|.+?)\"");
     static readonly Regex B64Marker = new("[A-Za-z0-9]{8}\\*\\*");
 
-    public static async Task<string> GetJson(string url)
+    public static async Task<string> GetJson(string url, bool allowPlainText = false)
     {
-        var res = await Net.HttpUtil.Get(url, timeoutMs: 30000);
-        var finalUrl = res.FinalUrl.Contains('?') == url.Contains('?') ? res.FinalUrl : url;
-        return Verify(finalUrl, res.Text());
+        var snapshot = SnapshotPath(url);
+        try
+        {
+            var res = await Net.HttpUtil.Get(url, timeoutMs: 30000);
+            if (res.Code is < 200 or >= 300)
+                throw new Exception("配置下载失败：HTTP " + res.Code);
+            var finalUrl = res.FinalUrl.Contains('?') == url.Contains('?') ? res.FinalUrl : url;
+            var json = Verify(finalUrl, res.Text());
+            if (!allowPlainText && !JsonUtil.IsObj(json)) throw new Exception("配置解析失败");
+            if (IsCacheable(json, allowPlainText)) DurableJsonFile.Write(snapshot, json);
+            return json;
+        }
+        catch (Exception networkError)
+        {
+            try
+            {
+                var cached = DurableJsonFile.Read(
+                    snapshot,
+                    content => IsCacheable(content, allowPlainText) ? content : null,
+                    () => null);
+                if (cached != null)
+                {
+                    Logger.E("ConfigCache", "配置刷新失败，已使用本地快照：" + networkError.Message);
+                    return cached;
+                }
+            }
+            catch (Exception cacheError)
+            {
+                Logger.E("ConfigCache", "读取配置快照失败：" + cacheError.Message);
+            }
+
+            throw;
+        }
+    }
+
+    static string SnapshotPath(string url)
+    {
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes((url ?? "").Trim())))
+            .ToLowerInvariant()[..24];
+        return Path.Combine(AppPaths.Cache, "source-" + key + ".txt");
+    }
+
+    static bool IsCacheable(string content, bool allowPlainText)
+    {
+        if (JsonUtil.IsObj(content)) return true;
+        if (!allowPlainText || string.IsNullOrWhiteSpace(content)) return false;
+
+        // Only persist recognizable live playlists. This prevents a HTTP 200 HTML
+        // error page from replacing a previously valid offline source.
+        if (content.Contains("#EXTM3U", StringComparison.OrdinalIgnoreCase) &&
+            content.Contains("://", StringComparison.Ordinal)) return true;
+        foreach (var rawLine in content.Split('\n'))
+        {
+            var line = rawLine.Trim();
+            var comma = line.IndexOf(',');
+            if (comma > 0 && line[(comma + 1)..].Contains("://", StringComparison.Ordinal)) return true;
+        }
+        return false;
     }
 
     public static string Verify(string url, string data)

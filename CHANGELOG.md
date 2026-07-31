@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 1.0.4 - 2026-07-31
+
+### Added
+
+- Added a live-player channel picker that reuses the video episode selector icon and right-side overlay interaction.
+
+### Fixed
+
+- Kept live channel selection and channel navigation available while a stream is resolving; choosing another channel now cancels the stale load and starts the latest request.
+- Fixed video and live bottom-bar flyout controls freezing or crashing the app when opening expandable menus.
+- Hid the video-player back button in picture-in-picture mode while preserving keyboard and bottom-bar exit controls.
+- Applied the shared 8-pixel player corner radius in normal and picture-in-picture modes while retaining square, edge-to-edge full-screen playback.
+- Added even spacing around the live player in its normal page layout without exposing the underlying surface during picture-in-picture resizing.
+- Covered the uncropped Flyleaf swap-chain corner pixels with theme-matched inverse-corner masks in the normal video and live layouts.
+- Stabilized the original maximized restore rectangle after leaving picture-in-picture so the system Restore command no longer reuses compact-window bounds.
+- Prevented navigation rail glyphs from losing edge pixels after full-screen or picture-in-picture transitions by removing nested fixed-size clipping and stabilizing the restored shell layout.
+- Replaced navigation rail font glyphs with inset vector paths and changed shell restoration from repeated 50 ms layout forcing to one debounced final layout pass.
+- Isolated picture-in-picture presenter properties, preserved and guarded the shared native restore bounds, and applied one transition to video and live full-screen/picture-in-picture changes.
+- Prevented video and live line switching from rebuilding an active WinUI flyout during its click event, eliminating the native input crash.
+- Serialized media source transitions and rejected stale resolver, decoder, recovery, and playback callbacks from previous lines.
+- Unified search, detail, and player back buttons with one shared icon, size, padding, and spacing specification.
+- Removed the extra focus outline around episode cards on the video detail page.
+- Removed the nested live-page surface and duplicate title, aligning all primary pages on the shared page padding and title styles.
+
 ### Documentation
 
 - Added the GPL-3.0 project license and a README interface screenshot.

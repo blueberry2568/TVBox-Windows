@@ -1,10 +1,12 @@
 ﻿using System.Globalization;
-using Microsoft.UI.Dispatching;
+using System.Numerics;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Data;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.System;
@@ -16,7 +18,7 @@ using TVBoxForWindows.Server;
 namespace TVBoxForWindows.UI.Pages;
 
 /// <summary>点播播放页（契约 §5.2，移植自 VideoActivity 播放部分）：FlyleafHost + 弹幕层 + 自动隐藏控制层
-/// + 选集侧栏；解析走 PlayResolver，失败自动换线路同名集；历史记录 5 秒落盘、跳片头尾、全屏/画中画/快捷键。</summary>
+/// + 选集面板；解析走 PlayResolver，失败自动换线路同名集；历史记录 5 秒落盘、跳片头尾、全屏/画中画/快捷键。</summary>
 public sealed partial class PlayerPage : Page, INavigationPlayback
 {
     const string TAG = "PlayerPage";
@@ -45,12 +47,22 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     int _scale;
     bool _danmakuVisible;
     bool _updatingSlider;                          // 抑制程序化改 Slider 触发 Seek
-    bool _updatingGear;                            // 抑制齿轮 Flyout 程序化赋值
+    bool _updatingGear;                            // 抑制播放设置面板程序化赋值
     bool _endingFired;                             // 片尾自动下一集只触发一次
     bool _fullscreen, _compact;
     bool _closed;                                  // 已离开页面，晚到事件全部忽略
     bool _pauseWhenOpened;                         // 隐藏期间晚到的解析结果起播后立即暂停
     int _menuOpen;                                 // 打开中的 Flyout 数（暂停自动隐藏）
+    int _playGeneration;                           // 只允许最新一次解析结果提交给播放器
+    bool _sourceTransitionInProgress;              // 防止 Flyleaf OpenAsync 重叠换源
+    PlayerSelectionKind _selectionKind;
+    FrameworkElement _selectionAnchor;
+    int _selectionMutationVersion;
+    List<Sub> _pendingSubtitleItems = new();
+    CompositionRoundedRectangleGeometry _playerAreaClipGeometry;
+    CompositionGeometricClip _playerAreaClip;
+    readonly Microsoft.UI.Xaml.Media.SolidColorBrush _compactCornerMaskBrush =
+        new(Microsoft.UI.Colors.Black);
     long _lastSaveTick;                            // 上次历史落盘（墙钟）
     long? _pendingSeekMs;
     long _seekIssuedTick;
@@ -78,13 +90,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         var timeConverter = new MsTimeConverter();
         SeekSlider.ThumbToolTipValueConverter = timeConverter;
         CompactSeekSlider.ThumbToolTipValueConverter = timeConverter;
-        foreach (var flyout in new FlyoutBase[]
-        {
-            SpeedMenu, ScaleMenu, FlagMenu, SubMenu, CompactMoreMenu,
-            CompactSpeedMenu, CompactScaleMenu, CompactFlagMenu, CompactSubMenu,
-            GearFlyout, DanmakuFlyout,
-        })
-            HookFlyout(flyout);
+        HookFlyout(DanmakuFlyout);
     }
 
     // ---------- 生命周期 ----------
@@ -105,7 +111,6 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         InitTimers();
         InitPlayer();
         BuildFlagMenu();
-        BuildEpisodePane();
         SubscribeServer();
         if (_core == null) return; // FFmpeg 缺失：只显示指引
         // 进入时恢复：仅当历史指向当前集且位置 > 5s 才续播
@@ -119,8 +124,10 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     {
         base.OnNavigatedFrom(e);
         _closed = true;
+        _selectionMutationVersion++;
+        CloseSelectionPanel(false);
         InvalidateSubtitleLoad();
-        _cts?.Cancel();
+        CancelPlayRequest();
         _hideTimer?.Stop();
         _toastTimer?.Stop();
         DisposeSeekTimer();
@@ -130,12 +137,15 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         // 恢复窗口与应用壳
         if (_fullscreen || _compact)
         {
+            try { App.Main.RestorePlaybackWindow(); } catch { }
             _fullscreen = _compact = false;
             ApplyPresentationMode();
-            try { App.Main.RestorePlaybackWindow(); } catch { }
         }
         else App.Main.SetImmersive(false);
-        _hostBinding?.Dispose();
+        if (_hostBinding != null)
+        {
+            _hostBinding.Dispose();
+        }
         _hostBinding = null;
         if (_core != null)
         {
@@ -234,20 +244,20 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     {
         var ep = _session.CurrentEpisode;
         if (ep == null || _core == null) return;
+        SetSourceTransition(true);
         CancelPendingSeek();
         InvalidateSubtitleLoad();
         _endingFired = false;
         ResetProgressVisuals();
-        _cts?.Cancel();
-        _cts = new CancellationTokenSource();
-        var ct = _cts.Token;
+        var cts = StartPlayRequest(out var generation);
+        var ct = cts.Token;
         UpdateEpisodeUi();
         ErrorBar.IsOpen = false;
         ShowLoading("解析中…");
         try
         {
             var item = await PlayResolver.Resolve(_session.Site, _session.CurrentFlag?.Flag, ep, ct);
-            if (ct.IsCancellationRequested || _closed) return;
+            if (!IsCurrentPlayRequest(cts, generation)) return;
             _item = item;
             long start = item.StartPositionMs;
             if (resumeMs > 0) start = Math.Max(start, resumeMs);
@@ -264,10 +274,42 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
                 try { _danmakuEngine.Clear(); _danmaku.Unbind(); } catch { }
             if (showRestoreToast && resumeMs > 0) ShowToast("已恢复到 " + Fmt(resumeMs));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            if (!ct.IsCancellationRequested && !_closed) OnPlayError(ex.Message);
+            if (IsCurrentPlayRequest(cts, generation)) OnPlayError(ex.Message);
         }
+        finally
+        {
+            if (ReferenceEquals(_cts, cts)) _cts = null;
+            cts.Dispose();
+        }
+    }
+
+    CancellationTokenSource StartPlayRequest(out int generation)
+    {
+        var previous = _cts;
+        var current = new CancellationTokenSource();
+        _cts = current;
+        generation = ++_playGeneration;
+        try { previous?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        finally { previous?.Dispose(); }
+        return current;
+    }
+
+    bool IsCurrentPlayRequest(CancellationTokenSource cts, int generation) =>
+        !_closed && !cts.IsCancellationRequested &&
+        generation == _playGeneration && ReferenceEquals(_cts, cts);
+
+    void CancelPlayRequest()
+    {
+        _playGeneration++;
+        var current = _cts;
+        _cts = null;
+        try { current?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        finally { current?.Dispose(); }
     }
 
     void OnCoreOpened()
@@ -275,6 +317,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         if (_closed) return;
         HideLoading();
         _triedFlags.Clear();
+        SetSourceTransition(false);
         try { _core.Speed = _speed; _core.Scale = _scale; } catch { }
         if (_pauseWhenOpened && _core?.IsPlaying == true) _core.PlayPause();
         _hostBinding?.RequestSynchronize();
@@ -284,6 +327,11 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnCoreErrored(string msg)
     {
         if (_closed) return;
+        if (_sourceTransitionInProgress && _cts != null)
+        {
+            Logger.D(TAG, "已忽略新线路解析期间旧媒体的错误: " + msg);
+            return;
+        }
         OnPlayError(msg);
     }
 
@@ -291,6 +339,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnCoreEnded()
     {
         if (_closed) return;
+        if (_sourceTransitionInProgress && _cts != null) return;
         var eps = _session.CurrentFlag?.Episodes;
         if (eps != null && _session.EpisodeIndex + 1 < eps.Count)
         {
@@ -330,11 +379,11 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             ShowToast("播放失败，自动切换线路「" + _session.Flags[idx].Flag + "」");
             _session.FlagIndex = idx;
             _session.EpisodeIndex = Math.Max(0, _session.Flags[idx].Episodes.IndexOf(match));
-            BuildFlagMenu();
-            BuildEpisodePane();
+            UpdateFlagUi();
             _ = PlayCurrent(pos > 5000 ? pos : 0);
             return;
         }
+        SetSourceTransition(false);
         ShowError((string.IsNullOrEmpty(msg) ? "未知错误" : msg) + "（可手动切换线路或选集重试）");
     }
 
@@ -485,6 +534,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     void ChangeEpisode(int delta)
     {
+        if (_sourceTransitionInProgress) return;
         var eps = _session.CurrentFlag?.Episodes;
         if (eps == null || eps.Count == 0) return;
         int idx = _session.EpisodeIndex + delta;
@@ -499,6 +549,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     void SwitchFlag(int idx)
     {
+        if (_sourceTransitionInProgress) return;
         if (idx < 0 || idx >= _session.Flags.Count || idx == _session.FlagIndex) return;
         var name = _session.CurrentEpisode?.Name;
         long pos = _core?.PositionMs ?? 0;
@@ -508,71 +559,62 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         var match = flag?.Find(name, false);
         _session.EpisodeIndex = match != null ? Math.Max(0, flag.Episodes.IndexOf(match)) : 0;
         _triedFlags.Clear();
-        BuildFlagMenu();
-        BuildEpisodePane();
+        UpdateFlagUi();
         _ = PlayCurrent(pos > 5000 ? pos : 0);
     }
 
     void BuildFlagMenu()
     {
-        PopulateFlagMenu(FlagMenu, "flags");
-        PopulateFlagMenu(CompactFlagMenu, "compact-flags");
+        UpdateFlagUi(false);
+    }
+
+    void UpdateFlagUi(bool syncMenus = true)
+    {
         var label = _session.CurrentFlag?.Flag ?? "线路";
         FlagText.Text = label;
         CompactFlagText.Text = label;
-        var enabled = _session.Flags.Count > 0;
-        FlagButton.IsEnabled = enabled;
-        CompactFlagButton.IsEnabled = enabled;
+        UpdateSourceControlAvailability();
+        if (syncMenus && _selectionKind == PlayerSelectionKind.Flag) RefreshSelectionPanel();
     }
 
-    void PopulateFlagMenu(MenuFlyout menu, string groupName)
+    void SetSourceTransition(bool inProgress)
     {
-        menu.Items.Clear();
-        for (int i = 0; i < _session.Flags.Count; i++)
-        {
-            var item = new RadioMenuFlyoutItem
-            {
-                Text = _session.Flags[i].Flag,
-                GroupName = groupName,
-                IsChecked = i == _session.FlagIndex,
-                Tag = i,
-            };
-            item.Click += (s, e) => SwitchFlag((int)((FrameworkElement)s).Tag);
-            menu.Items.Add(item);
-        }
+        _sourceTransitionInProgress = inProgress;
+        UpdateSourceControlAvailability();
     }
 
-    void BuildEpisodePane()
+    void UpdateSourceControlAvailability()
     {
-        var flag = _session.CurrentFlag;
-        var eps = flag?.Episodes ?? new List<Episode>();
-        PaneInfoText.Text = (flag?.Flag ?? "") + " · 共 " + eps.Count + " 集";
-        EpisodeList.ItemsSource = eps;
-        EpisodeList.SelectedIndex = eps.Count > 0 ? Math.Clamp(_session.EpisodeIndex, 0, eps.Count - 1) : -1;
+        var enabled = !_sourceTransitionInProgress;
+        var hasFlags = _session?.Flags?.Count > 0;
+        var episodes = _session?.CurrentFlag?.Episodes;
+        FlagButton.IsEnabled = enabled && hasFlags;
+        CompactFlagButton.IsEnabled = enabled && hasFlags;
+        EpisodeButton.IsEnabled = enabled && episodes is { Count: > 0 };
+        CompactEpisodeButton.IsEnabled = enabled && episodes is { Count: > 0 };
+        PrevEpisodeButton.IsEnabled = enabled && _session?.EpisodeIndex > 0;
+        CompactPrevEpisodeButton.IsEnabled = PrevEpisodeButton.IsEnabled;
+        var hasNext = episodes is { Count: > 0 } && _session.EpisodeIndex + 1 < episodes.Count;
+        NextEpisodeButton.IsEnabled = enabled && hasNext;
+        CompactNextEpisodeButton.IsEnabled = NextEpisodeButton.IsEnabled;
     }
 
     void UpdateEpisodeUi()
     {
         EpNameText.Text = _session.CurrentEpisode?.Name ?? "";
-        var eps = _session.CurrentFlag?.Episodes;
-        if (eps is { Count: > 0 })
-        {
-            var idx = Math.Clamp(_session.EpisodeIndex, 0, eps.Count - 1);
-            if (EpisodeList.SelectedIndex != idx) EpisodeList.SelectedIndex = idx;
-            try { if (EpisodeList.SelectedItem != null) EpisodeList.ScrollIntoView(EpisodeList.SelectedItem); } catch { }
-        }
         var flag = _session.CurrentFlag?.Flag ?? "线路";
         FlagText.Text = flag;
         CompactFlagText.Text = flag;
+        UpdateSourceControlAvailability();
+        if (_selectionKind == PlayerSelectionKind.Episode) RefreshSelectionPanel();
     }
 
-    void OnEpisodeItemClick(object sender, ItemClickEventArgs e)
+    void SelectEpisode(Episode ep)
     {
-        if (e.ClickedItem is not Episode ep) return;
+        if (_sourceTransitionInProgress || ep == null) return;
         var eps = _session.CurrentFlag?.Episodes;
         int idx = eps?.IndexOf(ep) ?? -1;
         if (idx < 0) return;
-        EpisodeSplit.IsPaneOpen = false;
         if (idx == _session.EpisodeIndex) return; // 点当前集不重播
         SaveHistoryNow();
         _session.EpisodeIndex = idx;
@@ -581,9 +623,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         _ = PlayCurrent(0);
     }
 
-    void OnOpenEpisodePane(object sender, RoutedEventArgs e) { EpisodeSplit.IsPaneOpen = true; BuildEpisodePane(); }
-
-    void OnCloseEpisodePane(object sender, RoutedEventArgs e) => EpisodeSplit.IsPaneOpen = false;
+    void OnOpenEpisodePane(object sender, RoutedEventArgs e) =>
+        OpenSelectionPanel(PlayerSelectionKind.Episode, sender as FrameworkElement);
 
     void OnPrevEpisode(object sender, RoutedEventArgs e) => ChangeEpisode(-1);
 
@@ -591,33 +632,12 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     // ---------- 倍速 / 缩放 ----------
 
-    void OnSpeedItem(object sender, RoutedEventArgs e)
-    {
-        if (!float.TryParse((sender as FrameworkElement)?.Tag as string, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) return;
-        _speed = v;
-        try { if (_core != null) _core.Speed = v; } catch { }
-        SyncSpeedMenu();
-        SaveHistoryNow();
-    }
-
     void SyncSpeedMenu()
     {
         var label = _speed.ToString("0.##", CultureInfo.InvariantCulture) + "x";
         SpeedText.Text = label;
         CompactSpeedText.Text = label;
-        foreach (var item in SpeedMenu.Items.OfType<RadioMenuFlyoutItem>())
-            item.IsChecked = float.TryParse(item.Tag as string, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && Math.Abs(v - _speed) < 0.01f;
-        foreach (var item in CompactSpeedMenu.Items.OfType<RadioMenuFlyoutItem>())
-            item.IsChecked = float.TryParse(item.Tag as string, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) && Math.Abs(v - _speed) < 0.01f;
-    }
-
-    void OnScaleItem(object sender, RoutedEventArgs e)
-    {
-        if (!int.TryParse((sender as FrameworkElement)?.Tag as string, out var v)) return;
-        _scale = Math.Clamp(v, 0, 4);
-        try { if (_core != null) _core.Scale = _scale; } catch { }
-        SyncScaleMenu();
-        SaveHistoryNow();
+        if (_selectionKind == PlayerSelectionKind.Speed) RefreshSelectionPanel();
     }
 
     void SyncScaleMenu()
@@ -625,30 +645,318 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         var label = ScaleNames[Math.Clamp(_scale, 0, 4)];
         ScaleText.Text = label;
         CompactScaleText.Text = label;
-        foreach (var item in ScaleMenu.Items.OfType<RadioMenuFlyoutItem>())
-            item.IsChecked = int.TryParse(item.Tag as string, out var v) && v == _scale;
-        foreach (var item in CompactScaleMenu.Items.OfType<RadioMenuFlyoutItem>())
-            item.IsChecked = int.TryParse(item.Tag as string, out var v) && v == _scale;
+        if (_selectionKind == PlayerSelectionKind.Scale) RefreshSelectionPanel();
     }
 
     static void SetChevron(FontIcon icon, bool open) => icon.Glyph = open ? ChevronUp : ChevronDown;
 
-    void OnSpeedMenuOpened(object sender, object e) => SetChevron(SpeedChevron, true);
-    void OnSpeedMenuClosed(object sender, object e) => SetChevron(SpeedChevron, false);
-    void OnScaleMenuOpened(object sender, object e) => SetChevron(ScaleChevron, true);
-    void OnScaleMenuClosed(object sender, object e) => SetChevron(ScaleChevron, false);
-    void OnFlagMenuOpened(object sender, object e) => SetChevron(FlagChevron, true);
-    void OnFlagMenuClosed(object sender, object e) => SetChevron(FlagChevron, false);
-    void OnSubMenuOpened(object sender, object e) => SetChevron(SubChevron, true);
-    void OnSubMenuClosed(object sender, object e) => SetChevron(SubChevron, false);
-    void OnCompactSpeedMenuOpened(object sender, object e) => SetChevron(CompactSpeedChevron, true);
-    void OnCompactSpeedMenuClosed(object sender, object e) => SetChevron(CompactSpeedChevron, false);
-    void OnCompactScaleMenuOpened(object sender, object e) => SetChevron(CompactScaleChevron, true);
-    void OnCompactScaleMenuClosed(object sender, object e) => SetChevron(CompactScaleChevron, false);
-    void OnCompactFlagMenuOpened(object sender, object e) => SetChevron(CompactFlagChevron, true);
-    void OnCompactFlagMenuClosed(object sender, object e) => SetChevron(CompactFlagChevron, false);
-    void OnCompactSubMenuOpened(object sender, object e) => SetChevron(CompactSubChevron, true);
-    void OnCompactSubMenuClosed(object sender, object e) => SetChevron(CompactSubChevron, false);
+    void OnOpenSpeedMenu(object sender, RoutedEventArgs e) =>
+        OpenSelectionPanel(PlayerSelectionKind.Speed, sender as FrameworkElement);
+
+    void OnOpenScaleMenu(object sender, RoutedEventArgs e) =>
+        OpenSelectionPanel(PlayerSelectionKind.Scale, sender as FrameworkElement);
+
+    void OnOpenFlagMenu(object sender, RoutedEventArgs e) =>
+        OpenSelectionPanel(PlayerSelectionKind.Flag, sender as FrameworkElement);
+
+    void OnOpenSubtitleMenu(object sender, RoutedEventArgs e) =>
+        OpenSelectionPanel(PlayerSelectionKind.Subtitle, sender as FrameworkElement);
+
+    void OnOpenCompactMoreMenu(object sender, RoutedEventArgs e) =>
+        OpenSelectionPanel(PlayerSelectionKind.More, sender as FrameworkElement);
+
+    void OnOpenSettingsPanel(object sender, RoutedEventArgs e) =>
+        OpenSelectionPanel(PlayerSelectionKind.Settings, sender as FrameworkElement);
+
+    void OpenSelectionPanel(PlayerSelectionKind kind, FrameworkElement anchor = null) =>
+        QueueSelectionMutation(() => OpenSelectionPanelCore(kind, anchor));
+
+    void OpenSelectionPanelCore(PlayerSelectionKind kind, FrameworkElement anchor)
+    {
+        if (_closed || _session == null) return;
+        if (_selectionKind == kind && PlayerSelectionOverlay.Visibility == Visibility.Visible)
+        {
+            CloseSelectionPanel();
+            return;
+        }
+        if (_selectionKind != PlayerSelectionKind.None) CloseSelectionPanel(false);
+        _selectionKind = kind;
+        _selectionAnchor = anchor ?? ResolveSelectionAnchor(kind);
+        RefreshSelectionPanel();
+        PlayerSelectionOverlay.Opacity = 0;
+        PlayerSelectionOverlay.Visibility = Visibility.Visible;
+        PlayerSelectionOverlay.UpdateLayout();
+        PositionSelectionPanel();
+        PlayerSelectionOverlay.Opacity = 1;
+        _menuOpen++;
+        SetSelectionChevrons(kind, true);
+        ShowControls();
+    }
+
+    void RefreshSelectionPanel()
+    {
+        if (_selectionKind == PlayerSelectionKind.None) return;
+
+        IEnumerable<PlayerSelectionItem> items;
+        PlayerSelectionAction.Visibility = Visibility.Collapsed;
+        PlayerSelectionAction.Tag = null;
+        PlayerSettingsScroller.Visibility = Visibility.Collapsed;
+        switch (_selectionKind)
+        {
+            case PlayerSelectionKind.Speed:
+                PlayerSelectionTitle.Text = "播放速度";
+                items = new[] { 1f, 1.25f, 1.5f, 1.75f, 2f, 2.5f, 3f, 4f }
+                    .Select(value => new PlayerSelectionItem(
+                        value.ToString("0.##", CultureInfo.InvariantCulture) + "x",
+                        value,
+                        Math.Abs(value - _speed) < 0.01f));
+                break;
+            case PlayerSelectionKind.Scale:
+                PlayerSelectionTitle.Text = "画面比例";
+                items = ScaleNames.Select((label, index) =>
+                    new PlayerSelectionItem(label, index, index == _scale));
+                break;
+            case PlayerSelectionKind.Flag:
+                PlayerSelectionTitle.Text = "播放线路";
+                items = _session.Flags.Select((flag, index) =>
+                    new PlayerSelectionItem(flag.Flag, index, index == _session.FlagIndex));
+                break;
+            case PlayerSelectionKind.Subtitle:
+                PlayerSelectionTitle.Text = "字幕";
+                items = _pendingSubtitleItems.Select((sub, index) =>
+                    new PlayerSelectionItem(SubtitleLabel(sub, index), sub, false));
+                PlayerSelectionAction.Content = "加载本地字幕…";
+                PlayerSelectionAction.Tag = PlayerSelectionActionKind.LocalSubtitle;
+                PlayerSelectionAction.Visibility = Visibility.Visible;
+                break;
+            case PlayerSelectionKind.Episode:
+                PlayerSelectionTitle.Text = "选集";
+                var episodes = _session.CurrentFlag?.Episodes ?? new List<Episode>();
+                items = episodes.Select((episode, index) =>
+                    new PlayerSelectionItem(episode.Name, episode, index == _session.EpisodeIndex));
+                break;
+            case PlayerSelectionKind.Settings:
+                PlayerSelectionTitle.Text = "跳过片头片尾";
+                RefreshGearSettings();
+                PlayerSettingsScroller.Visibility = Visibility.Visible;
+                items = Array.Empty<PlayerSelectionItem>();
+                break;
+            default:
+                PlayerSelectionTitle.Text = "更多";
+                items = new[]
+                {
+                    new PlayerSelectionItem("选择剧集", PlayerSelectionActionKind.Episodes, false),
+                    new PlayerSelectionItem("加载本地字幕…", PlayerSelectionActionKind.LocalSubtitle, false),
+                };
+                break;
+        }
+
+        var list = items.ToList();
+        PlayerSelectionList.ItemsSource = list;
+        PlayerSelectionList.SelectedItem = list.FirstOrDefault(item => item.IsSelected);
+        PlayerSelectionList.Visibility = _selectionKind != PlayerSelectionKind.Settings && list.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        if (PlayerSelectionOverlay.Visibility == Visibility.Visible) PositionSelectionPanel();
+    }
+
+    FrameworkElement ResolveSelectionAnchor(PlayerSelectionKind kind) => kind switch
+    {
+        PlayerSelectionKind.Speed => _compact ? CompactSpeedButton : SpeedButton,
+        PlayerSelectionKind.Scale => _compact ? CompactScaleButton : ScaleButton,
+        PlayerSelectionKind.Flag => _compact ? CompactFlagButton : FlagButton,
+        PlayerSelectionKind.Subtitle => _compact ? CompactSubButton : SubButton,
+        PlayerSelectionKind.Episode => _compact
+            ? (CompactEpisodeButton.Visibility == Visibility.Visible ? CompactEpisodeButton : CompactMoreButton)
+            : EpisodeButton,
+        PlayerSelectionKind.More => CompactMoreButton,
+        PlayerSelectionKind.Settings => _compact ? CompactGearButton : GearButton,
+        _ => null,
+    };
+
+    void PositionSelectionPanel()
+    {
+        if (PlayerSelectionOverlay.Visibility != Visibility.Visible) return;
+
+        const double edge = 12;
+        const double gap = 8;
+        var overlayWidth = PlayerSelectionOverlay.ActualWidth > 0
+            ? PlayerSelectionOverlay.ActualWidth
+            : PlayerArea.ActualWidth;
+        var overlayHeight = PlayerSelectionOverlay.ActualHeight > 0
+            ? PlayerSelectionOverlay.ActualHeight
+            : PlayerArea.ActualHeight;
+        if (overlayWidth <= 0 || overlayHeight <= 0) return;
+
+        var panelWidth = Math.Min(280, Math.Max(1, overlayWidth - edge * 2));
+        var anchor = _selectionAnchor ?? ResolveSelectionAnchor(_selectionKind);
+        double anchorLeft;
+        double anchorTop;
+        double anchorWidth;
+        try
+        {
+            if (anchor == null || anchor.ActualWidth <= 0)
+                throw new InvalidOperationException();
+            var point = anchor.TransformToVisual(PlayerSelectionOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            anchorLeft = point.X;
+            anchorTop = point.Y;
+            anchorWidth = anchor.ActualWidth;
+        }
+        catch
+        {
+            anchorLeft = overlayWidth - edge - panelWidth;
+            anchorTop = overlayHeight - (_compact ? 74 : 112);
+            anchorWidth = panelWidth;
+        }
+
+        var availableHeight = Math.Max(1, anchorTop - edge - gap);
+        var panelMaxHeight = Math.Min(420, availableHeight);
+        PlayerSelectionPanel.Width = panelWidth;
+        PlayerSelectionPanel.MaxHeight = panelMaxHeight;
+        PlayerSelectionPanel.Margin = new Thickness(0);
+        PlayerSelectionPanel.Measure(new Windows.Foundation.Size(panelWidth, panelMaxHeight));
+
+        var panelHeight = Math.Min(panelMaxHeight, Math.Max(1, PlayerSelectionPanel.DesiredSize.Height));
+        var left = anchorLeft + (anchorWidth - panelWidth) / 2;
+        left = Math.Clamp(left, edge, Math.Max(edge, overlayWidth - panelWidth - edge));
+        var top = Math.Max(edge, anchorTop - gap - panelHeight);
+        PlayerSelectionPanel.Margin = new Thickness(left, top, 0, 0);
+    }
+
+    void OnSelectionOverlaySizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_selectionKind != PlayerSelectionKind.None) PositionSelectionPanel();
+    }
+
+    static string SubtitleLabel(Sub sub, int index) =>
+        !string.IsNullOrEmpty(sub?.Name) ? sub.Name :
+        !string.IsNullOrEmpty(sub?.Lang) ? sub.Lang :
+        "字幕 " + (index + 1);
+
+    void OnSelectionItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not PlayerSelectionItem item) return;
+        var kind = _selectionKind;
+        var value = item.Value;
+        QueueSelectionMutation(() =>
+        {
+            CloseSelectionPanel();
+            CommitSelection(kind, value);
+        });
+    }
+
+    // Keep overlay collapse/rebinding out of the WinUI routed-input stack.
+    void QueueSelectionMutation(Action mutation)
+    {
+        var version = ++_selectionMutationVersion;
+        void CommitMutation()
+        {
+            if (_closed || version != _selectionMutationVersion) return;
+            mutation();
+        }
+        DispatcherQueue?.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            CommitMutation);
+    }
+
+    void CommitSelection(PlayerSelectionKind kind, object value)
+    {
+        if (_closed) return;
+        switch (kind)
+        {
+            case PlayerSelectionKind.Speed when value is float speed:
+                _speed = speed;
+                try { if (_core != null) _core.Speed = speed; } catch { }
+                SyncSpeedMenu();
+                SaveHistoryNow();
+                break;
+            case PlayerSelectionKind.Scale when value is int scale:
+                _scale = Math.Clamp(scale, 0, ScaleNames.Length - 1);
+                try { if (_core != null) _core.Scale = _scale; } catch { }
+                SyncScaleMenu();
+                SaveHistoryNow();
+                break;
+            case PlayerSelectionKind.Flag when value is int flagIndex:
+                SwitchFlag(flagIndex);
+                break;
+            case PlayerSelectionKind.Subtitle when value is Sub subtitle:
+                _ = LoadSubtitle(subtitle);
+                break;
+            case PlayerSelectionKind.Episode when value is Episode episode:
+                SelectEpisode(episode);
+                break;
+            case PlayerSelectionKind.More when value is PlayerSelectionActionKind action:
+                if (action == PlayerSelectionActionKind.Episodes) OnOpenEpisodePane(null, null);
+                else if (action == PlayerSelectionActionKind.LocalSubtitle) OnPickLocalSubtitle(null, null);
+                break;
+        }
+    }
+
+    void OnSelectionActionClick(object sender, RoutedEventArgs e)
+    {
+        var action = PlayerSelectionAction.Tag is PlayerSelectionActionKind value
+            ? value
+            : PlayerSelectionActionKind.None;
+        QueueSelectionMutation(() =>
+        {
+            CloseSelectionPanel();
+            if (_closed) return;
+            if (action == PlayerSelectionActionKind.Episodes) OnOpenEpisodePane(null, null);
+            else if (action == PlayerSelectionActionKind.LocalSubtitle) OnPickLocalSubtitle(null, null);
+        });
+    }
+
+    void OnSelectionOverlayTapped(object sender, TappedRoutedEventArgs e)
+    {
+        QueueSelectionMutation(() => CloseSelectionPanel());
+        e.Handled = true;
+    }
+
+    void OnSelectionPanelTapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+
+    void OnCloseSelectionPanel(object sender, RoutedEventArgs e) =>
+        QueueSelectionMutation(() => CloseSelectionPanel());
+
+    void CloseSelectionPanel(bool showControls = true)
+    {
+        if (_selectionKind == PlayerSelectionKind.None &&
+            PlayerSelectionOverlay.Visibility != Visibility.Visible) return;
+        var previous = _selectionKind;
+        _selectionKind = PlayerSelectionKind.None;
+        _selectionAnchor = null;
+        PlayerSelectionOverlay.Visibility = Visibility.Collapsed;
+        PlayerSelectionList.ItemsSource = null;
+        PlayerSettingsScroller.Visibility = Visibility.Collapsed;
+        PlayerSelectionAction.Tag = null;
+        PlayerSelectionAction.Visibility = Visibility.Collapsed;
+        _menuOpen = Math.Max(0, _menuOpen - 1);
+        SetSelectionChevrons(previous, false);
+        if (showControls) ShowControls();
+    }
+
+    void SetSelectionChevrons(PlayerSelectionKind kind, bool open)
+    {
+        switch (kind)
+        {
+            case PlayerSelectionKind.Speed:
+                SetChevron(SpeedChevron, open);
+                SetChevron(CompactSpeedChevron, open);
+                break;
+            case PlayerSelectionKind.Scale:
+                SetChevron(ScaleChevron, open);
+                SetChevron(CompactScaleChevron, open);
+                break;
+            case PlayerSelectionKind.Flag:
+                SetChevron(FlagChevron, open);
+                SetChevron(CompactFlagChevron, open);
+                break;
+            case PlayerSelectionKind.Subtitle:
+                SetChevron(SubChevron, open);
+                SetChevron(CompactSubChevron, open);
+                break;
+        }
+    }
 
     // ---------- 弹幕 ----------
 
@@ -737,36 +1045,10 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     void RefreshSubMenu(PlayItem item)
     {
-        var subs = item.Subs ?? new List<Sub>();
-        PopulateSubtitleMenu(SubMenu, subs, includeEpisode: false);
-        PopulateSubtitleMenu(CompactSubMenu, subs, includeEpisode: false);
-        PopulateSubtitleMenu(CompactMoreMenu, subs, includeEpisode: true);
+        _pendingSubtitleItems = new List<Sub>(item.Subs ?? new List<Sub>());
         SubButton.IsEnabled = true;
         CompactSubButton.IsEnabled = true;
-    }
-
-    void PopulateSubtitleMenu(MenuFlyout menu, List<Sub> subs, bool includeEpisode)
-    {
-        menu.Items.Clear();
-        if (includeEpisode)
-        {
-            var episodes = new MenuFlyoutItem { Text = "选集" };
-            episodes.Click += OnOpenEpisodePane;
-            menu.Items.Add(episodes);
-            menu.Items.Add(new MenuFlyoutSeparator());
-        }
-        for (int i = 0; i < subs.Count; i++)
-        {
-            var sub = subs[i];
-            var name = !string.IsNullOrEmpty(sub.Name) ? sub.Name : !string.IsNullOrEmpty(sub.Lang) ? sub.Lang : "字幕 " + (i + 1);
-            var mi = new MenuFlyoutItem { Text = name };
-            mi.Click += (s, e) => _ = LoadSubtitle(sub);
-            menu.Items.Add(mi);
-        }
-        if (subs.Count > 0) menu.Items.Add(new MenuFlyoutSeparator());
-        var local = new MenuFlyoutItem { Text = "加载本地字幕…" };
-        local.Click += OnPickLocalSubtitle;
-        menu.Items.Add(local);
+        if (_selectionKind == PlayerSelectionKind.Subtitle) RefreshSelectionPanel();
     }
 
     async void OnPickLocalSubtitle(object sender, RoutedEventArgs e)
@@ -852,12 +1134,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     // ---------- 齿轮：跳片头尾 ----------
 
-    void OnOpenCompactGear(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement target) GearFlyout.ShowAt(target);
-    }
-
-    void OnGearOpening(object sender, object e)
+    void RefreshGearSettings()
     {
         _updatingGear = true;
         SkipToggle.IsOn = Setting.GetBool("skip_start_end");
@@ -900,7 +1177,19 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         Focus(FocusState.Programmatic);
     }
 
-    void OnPlayerDoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => ToggleFullscreen();
+    void OnPlayerDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (_selectionKind != PlayerSelectionKind.None)
+        {
+            QueueSelectionMutation(() =>
+            {
+                CloseSelectionPanel(false);
+                ToggleFullscreen();
+            });
+        }
+        else ToggleFullscreen();
+        e.Handled = true;
+    }
 
     void ShowControls()
     {
@@ -915,7 +1204,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     void MaybeHideControls()
     {
-        if (_closed || _menuOpen > 0 || EpisodeSplit.IsPaneOpen) return;
+        if (_closed || _menuOpen > 0) return;
         if (_core == null || !_core.IsPlaying) return; // 暂停/加载中不隐藏
         ControlLayer.IsHitTestVisible = false;
         FadeOutControls.Begin();
@@ -942,6 +1231,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     public void PauseForNavigation()
     {
         if (_closed) return;
+        _selectionMutationVersion++;
+        CloseSelectionPanel(false);
         _pauseWhenOpened = true;
         if (_core?.IsPlaying == true) _core.PlayPause();
         _core?.SetUiUpdatesEnabled(false);
@@ -972,12 +1263,12 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void ToggleFullscreen()
     {
         var entering = !_fullscreen;
-        _fullscreen = entering;
-        if (entering) _compact = false;
-        if (entering) ApplyPresentationMode();
-        try
+        if (entering)
         {
-            if (_fullscreen)
+            _fullscreen = true;
+            _compact = false;
+            ApplyPresentationMode();
+            try
             {
                 if (!App.Main.EnterPlaybackFullScreen())
                 {
@@ -985,13 +1276,20 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
                     ApplyPresentationMode();
                 }
             }
-            else
+            catch
             {
+                _fullscreen = false;
                 ApplyPresentationMode();
-                App.Main.RestorePlaybackWindow();
             }
         }
-        catch { }
+        else
+        {
+            // Keep the immersive visual tree visible until the native window has
+            // returned to its original presenter and placement.
+            if (!App.Main.RestorePlaybackWindow()) return;
+            _fullscreen = false;
+            ApplyPresentationMode();
+        }
         if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
         _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
@@ -1000,12 +1298,12 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnPip(object sender, RoutedEventArgs e)
     {
         var entering = !_compact;
-        _compact = entering;
-        if (entering) _fullscreen = false;
-        if (entering) ApplyPresentationMode();
-        try
+        if (entering)
         {
-            if (_compact)
+            _compact = true;
+            _fullscreen = false;
+            ApplyPresentationMode();
+            try
             {
                 if (!App.Main.EnterPlaybackCompact())
                 {
@@ -1013,14 +1311,22 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
                     ApplyPresentationMode();
                 }
             }
-            else
+            catch
             {
+                _compact = false;
                 ApplyPresentationMode();
-                App.Main.RestorePlaybackWindow();
             }
         }
-        catch { }
-        if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
+        else
+        {
+            // Keep the compact visual tree active until the native window has its
+            // original placement. Revealing the normal shell first exposes the
+            // stored non-maximized bounds for one frame before Windows maximizes it.
+            if (!App.Main.RestorePlaybackWindow()) return;
+            _compact = false;
+            ApplyPresentationMode();
+        }
+        if (entering && _compact) App.Main.RefreshImmersiveFrame(_fullscreen);
         _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
     }
@@ -1028,18 +1334,18 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void ApplyPresentationMode()
     {
         bool immersive = _fullscreen || _compact;
-        PageRoot.Padding = immersive ? new Thickness(0) : new Thickness(16);
-        PageRoot.Background = immersive
+        PageRoot.Padding = immersive
+            ? new Thickness(0)
+            : (Thickness)Application.Current.Resources["PlayerSurfaceMargin"];
+        PageRoot.Background = _fullscreen
             ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black)
             : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        PlayerSurface.CornerRadius = immersive ? new CornerRadius(0) : new CornerRadius(8);
-        PlayerSurface.BorderThickness = immersive ? new Thickness(0) : new Thickness(1);
-        PlayerSurface.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black);
         BottomBar.Visibility = _compact ? Visibility.Collapsed : Visibility.Visible;
         CompactBottomBar.Visibility = _compact ? Visibility.Visible : Visibility.Collapsed;
-        BackButton.Visibility = _fullscreen ? Visibility.Collapsed : Visibility.Visible;
+        BackButton.Visibility = immersive ? Visibility.Collapsed : Visibility.Visible;
         TitlePanel.Visibility = _compact ? Visibility.Collapsed : Visibility.Visible;
         CompactDragRegion.Visibility = _compact ? Visibility.Visible : Visibility.Collapsed;
+        if (_selectionKind != PlayerSelectionKind.None) CloseSelectionPanel(false);
         TopBar.Padding = _compact ? new Thickness(8, 6, 8, 16) : new Thickness(20, 14, 20, 28);
         PipEnterIcon.Visibility = _compact ? Visibility.Collapsed : Visibility.Visible;
         PipExitIcon.Visibility = _compact ? Visibility.Visible : Visibility.Collapsed;
@@ -1050,12 +1356,97 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         CompactFullIcon.Glyph = _fullscreen ? "" : "";
         _core?.SetViewportFill(_fullscreen);
         App.Main.SetImmersive(immersive);
+        UpdatePlayerAreaClip();
         DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
         {
             UpdateCompactLayout(CompactBottomBar.ActualWidth);
+            UpdatePlayerAreaClip();
             _hostBinding?.RequestSynchronize();
         });
     }
+
+    void OnPlayerAreaSizeChanged(object sender, SizeChangedEventArgs e) => UpdatePlayerAreaClip();
+
+    void UpdatePlayerAreaClip()
+    {
+        UpdateCornerMaskLayer();
+        var visual = ElementCompositionPreview.GetElementVisual(PlayerArea);
+        if (_fullscreen)
+        {
+            visual.Clip = null;
+            _hostBinding?.SetSurfaceCornerRadius(0);
+            return;
+        }
+
+        var width = PlayerArea.ActualWidth;
+        var height = PlayerArea.ActualHeight;
+        if (width <= 0 || height <= 0)
+        {
+            visual.Clip = null;
+            return;
+        }
+
+        var offsetX = 0d;
+        var offsetY = 0d;
+        var clipWidth = width;
+        var clipHeight = height;
+        try
+        {
+            var scale = XamlRoot?.RasterizationScale ?? 1d;
+            var origin = PlayerArea.TransformToVisual(null)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            var left = Math.Ceiling(origin.X * scale - 0.001d) / scale;
+            var top = Math.Ceiling(origin.Y * scale - 0.001d) / scale;
+            var right = Math.Floor((origin.X + width) * scale + 0.001d) / scale;
+            var bottom = Math.Floor((origin.Y + height) * scale + 0.001d) / scale;
+            if (right > left && bottom > top)
+            {
+                offsetX = left - origin.X;
+                offsetY = top - origin.Y;
+                clipWidth = right - left;
+                clipHeight = bottom - top;
+            }
+        }
+        catch { }
+
+        _playerAreaClipGeometry ??= visual.Compositor.CreateRoundedRectangleGeometry();
+        _playerAreaClip ??= visual.Compositor.CreateGeometricClip(_playerAreaClipGeometry);
+        _playerAreaClipGeometry.Offset = new Vector2((float)offsetX, (float)offsetY);
+        _playerAreaClipGeometry.Size = new Vector2((float)clipWidth, (float)clipHeight);
+        var radius = (float)SurfaceCornerRadius().TopLeft;
+        _playerAreaClipGeometry.CornerRadius = new Vector2(radius);
+        visual.Clip = _playerAreaClip;
+        _hostBinding?.SetSurfaceCornerRadius(radius);
+    }
+
+    void UpdateCornerMaskLayer()
+    {
+        PlayerCornerMaskLayer.Visibility = _fullscreen
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        var radius = Math.Max(0, SurfaceCornerRadius().TopLeft);
+        var fill = _compact
+            ? _compactCornerMaskBrush
+            : Application.Current.Resources["ApplicationPageBackgroundThemeBrush"]
+                as Microsoft.UI.Xaml.Media.Brush;
+        foreach (var corner in new Microsoft.UI.Xaml.Shapes.Path[]
+        {
+            PlayerCornerMaskTopLeft,
+            PlayerCornerMaskTopRight,
+            PlayerCornerMaskBottomRight,
+            PlayerCornerMaskBottomLeft,
+        })
+        {
+            corner.Width = radius;
+            corner.Height = radius;
+            if (fill != null) corner.Fill = fill;
+        }
+    }
+
+    static CornerRadius SurfaceCornerRadius() =>
+        Application.Current.Resources["SurfaceCornerRadius"] is CornerRadius radius
+            ? radius
+            : new CornerRadius(8);
 
     void OnBack(object sender, RoutedEventArgs e)
     {
@@ -1090,7 +1481,17 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             case VirtualKey.Down:
                 ChangeVolume(-5); e.Handled = true; break;
             case VirtualKey.F:
-                ToggleFullscreen(); e.Handled = true; break;
+                if (_selectionKind != PlayerSelectionKind.None)
+                {
+                    QueueSelectionMutation(() =>
+                    {
+                        CloseSelectionPanel(false);
+                        ToggleFullscreen();
+                    });
+                }
+                else ToggleFullscreen();
+                e.Handled = true;
+                break;
             case VirtualKey.M:
                 ToggleMute(); e.Handled = true; break;
             case VirtualKey.D:
@@ -1100,9 +1501,12 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             case (VirtualKey)0xDD: // ]
                 ChangeEpisode(1); e.Handled = true; break;
             case VirtualKey.Escape:
-                if (_compact) { OnPip(null, null); }
+                if (_selectionKind != PlayerSelectionKind.None)
+                {
+                    QueueSelectionMutation(() => CloseSelectionPanel());
+                }
+                else if (_compact) { OnPip(null, null); }
                 else if (_fullscreen) { ToggleFullscreen(); }
-                else if (EpisodeSplit.IsPaneOpen) { EpisodeSplit.IsPaneOpen = false; }
                 else if (Frame.CanGoBack) { Frame.GoBack(); }
                 e.Handled = true;
                 break;
@@ -1279,6 +1683,40 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         if (float.TryParse(s, out v)) return v;
         return def;
     }
+}
+
+enum PlayerSelectionKind
+{
+    None,
+    Speed,
+    Scale,
+    Flag,
+    Subtitle,
+    Episode,
+    More,
+    Settings,
+}
+
+enum PlayerSelectionActionKind
+{
+    None,
+    Episodes,
+    LocalSubtitle,
+}
+
+public sealed class PlayerSelectionItem
+{
+    public PlayerSelectionItem(string label, object value, bool isSelected)
+    {
+        Label = label ?? "";
+        Value = value;
+        IsSelected = isSelected;
+    }
+
+    public string Label { get; }
+    public object Value { get; }
+    public bool IsSelected { get; }
+    public string CheckGlyph => IsSelected ? "\uE73E" : "";
 }
 
 /// <summary>弹幕源列表项（Flyout 内 DataTemplate 绑定用）。</summary>

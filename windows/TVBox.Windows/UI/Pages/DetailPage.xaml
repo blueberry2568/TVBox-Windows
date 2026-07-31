@@ -12,8 +12,8 @@
 
         <!-- 顶部：返回 + 标题 -->
         <StackPanel Orientation="Horizontal" Spacing="12" Padding="24,16,24,0">
-            <Button Click="OnBack" ToolTipService.ToolTip="返回">
-                <FontIcon Glyph="&#xE72B;" FontSize="14"/>
+            <Button Style="{StaticResource PageBackButtonStyle}" Click="OnBack" ToolTipService.ToolTip="返回">
+                <FontIcon Style="{StaticResource PageBackIconStyle}"/>
             </Button>
             <TextBlock x:Name="TitleText"
                        Text="详情"
@@ -147,6 +147,25 @@
                               ItemClick="OnEpisodeClick"
                               ScrollViewer.VerticalScrollMode="Disabled"
                               ScrollViewer.VerticalScrollBarVisibility="Hidden">
+                        <GridView.Resources>
+                            <SolidColorBrush x:Key="ListViewItemBackgroundPointerOver" Color="Transparent"/>
+                            <SolidColorBrush x:Key="ListViewItemBackgroundPressed" Color="Transparent"/>
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelected" Color="Transparent"/>
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPointerOver" Color="Transparent"/>
+                            <SolidColorBrush x:Key="ListViewItemBackgroundSelectedPressed" Color="Transparent"/>
+                        </GridView.Resources>
+                        <GridView.ItemContainerStyle>
+                            <Style TargetType="GridViewItem" BasedOn="{StaticResource DefaultGridViewItemStyle}">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="BorderBrush" Value="Transparent"/>
+                                <Setter Property="BorderThickness" Value="0"/>
+                                <Setter Property="FocusVisualMargin" Value="0"/>
+                                <Setter Property="FocusVisualPrimaryThickness" Value="0"/>
+                                <Setter Property="FocusVisualSecondaryThickness" Value="0"/>
+                                <Setter Property="AllowFocusOnInteraction" Value="False"/>
+                            </Style>
+                        </GridView.ItemContainerStyle>
                         <GridView.ItemTemplate>
                             <DataTemplate>
                                 <Border Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"

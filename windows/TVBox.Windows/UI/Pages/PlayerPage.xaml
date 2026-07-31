@@ -5,7 +5,6 @@
     xmlns:controls="using:TVBoxForWindows.UI.Controls"
     xmlns:fl="using:FlyleafLib.Controls.WinUI"
     IsTabStop="True"
-    RequestedTheme="Dark"
     Background="Transparent">
 
     <Page.Resources>
@@ -58,46 +57,15 @@
         <x:Double x:Key="SliderTrackThemeHeight">3</x:Double>
     </Page.Resources>
 
-    <Grid x:Name="PageRoot" Padding="16" Background="Transparent">
+    <Grid x:Name="PageRoot" Padding="{StaticResource PlayerSurfaceMargin}" Background="Transparent">
         <Border x:Name="PlayerSurface"
-                Background="Black"
-                BorderBrush="#33FFFFFF"
-                BorderThickness="1"
-                CornerRadius="8">
-    <!-- 右侧滑出选集面板 -->
-    <SplitView x:Name="EpisodeSplit"
-               DisplayMode="Overlay"
-               PanePlacement="Right"
-               OpenPaneLength="360"
-               PaneBackground="#F51A1A1A"
-               Background="Black">
-        <SplitView.Pane>
-            <Grid Padding="16">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <Grid Grid.Row="0" Margin="0,4,0,8">
-                    <TextBlock Text="选集" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    <Button Content="&#xE711;" FontFamily="{ThemeResource SymbolThemeFontFamily}"
-                            HorizontalAlignment="Right" Background="Transparent" BorderThickness="0"
-                            Click="OnCloseEpisodePane" ToolTipService.ToolTip="关闭"/>
-                </Grid>
-                <TextBlock x:Name="PaneInfoText" Grid.Row="1" FontSize="12" Margin="0,0,0,8"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                <ListView x:Name="EpisodeList" Grid.Row="2" SelectionMode="Single"
-                          IsItemClickEnabled="True" ItemClick="OnEpisodeItemClick">
-                    <ListView.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding Name}" TextTrimming="CharacterEllipsis" Margin="0,6"/>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
-            </Grid>
-        </SplitView.Pane>
-
-        <Grid x:Name="PlayerArea" Background="Black" PointerMoved="OnPointerMoved">
+                Background="Transparent"
+                BorderBrush="Transparent"
+                BorderThickness="0">
+            <Grid>
+            <Grid x:Name="PlayerArea" Background="Black" RequestedTheme="Dark"
+                  PointerMoved="OnPointerMoved"
+                  SizeChanged="OnPlayerAreaSizeChanged">
             <VisualStateManager.VisualStateGroups>
                 <VisualStateGroup x:Name="PlayerWidthStates">
                     <VisualState x:Name="CompactPlayer">
@@ -148,7 +116,7 @@
             </VisualStateManager.VisualStateGroups>
 
             <!-- 视频层 -->
-            <fl:FlyleafHost x:Name="VideoHost" KeyBindings="False" Background="Black"/>
+            <fl:FlyleafHost x:Name="VideoHost" KeyBindings="False" Background="Transparent"/>
 
             <!-- 弹幕层（DanmakuView 纯 C# 控件，代码后置注入） -->
             <Grid x:Name="DanmakuLayer" IsHitTestVisible="False"/>
@@ -183,9 +151,9 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <Button x:Name="BackButton" Background="Transparent" BorderThickness="0" Padding="8"
+                    <Button x:Name="BackButton" Style="{StaticResource PageBackButtonStyle}"
                             Click="OnBack" ToolTipService.ToolTip="返回 (Esc)">
-                        <FontIcon Glyph="&#xE72B;" FontSize="16"/>
+                        <FontIcon Style="{StaticResource PageBackIconStyle}"/>
                     </Button>
                     <Border x:Name="CompactDragRegion"
                             Grid.Column="1"
@@ -264,71 +232,43 @@
                         <!-- 右簇：倍速/缩放/线路/选集/弹幕/字幕/设置/画中画/全屏 -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
                             <Button x:Name="SpeedButton" Background="Transparent"
-                                    BorderThickness="0" Padding="8,6" ToolTipService.ToolTip="倍速">
+                                    BorderThickness="0" Padding="8,6" ToolTipService.ToolTip="倍速"
+                                    Click="OnOpenSpeedMenu">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <TextBlock x:Name="SpeedText" Text="1x"/>
                                     <FontIcon x:Name="SpeedChevron" Glyph="&#xE70D;" FontSize="9"/>
                                 </StackPanel>
-                                <Button.Flyout>
-                                    <MenuFlyout x:Name="SpeedMenu" Opened="OnSpeedMenuOpened" Closed="OnSpeedMenuClosed">
-                                        <RadioMenuFlyoutItem Text="1x" Tag="1" GroupName="speed" IsChecked="True" Click="OnSpeedItem"/>
-                                        <RadioMenuFlyoutItem Text="1.25x" Tag="1.25" GroupName="speed" Click="OnSpeedItem"/>
-                                        <RadioMenuFlyoutItem Text="1.5x" Tag="1.5" GroupName="speed" Click="OnSpeedItem"/>
-                                        <RadioMenuFlyoutItem Text="1.75x" Tag="1.75" GroupName="speed" Click="OnSpeedItem"/>
-                                        <RadioMenuFlyoutItem Text="2x" Tag="2" GroupName="speed" Click="OnSpeedItem"/>
-                                        <RadioMenuFlyoutItem Text="2.5x" Tag="2.5" GroupName="speed" Click="OnSpeedItem"/>
-                                        <RadioMenuFlyoutItem Text="3x" Tag="3" GroupName="speed" Click="OnSpeedItem"/>
-                                        <RadioMenuFlyoutItem Text="4x" Tag="4" GroupName="speed" Click="OnSpeedItem"/>
-                                    </MenuFlyout>
-                                </Button.Flyout>
                             </Button>
 
                             <Button x:Name="ScaleButton" Background="Transparent"
-                                    BorderThickness="0" Padding="8,6" ToolTipService.ToolTip="画面缩放">
+                                    BorderThickness="0" Padding="8,6" ToolTipService.ToolTip="画面缩放"
+                                    Click="OnOpenScaleMenu">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <TextBlock x:Name="ScaleText" Text="原始"/>
                                     <FontIcon x:Name="ScaleChevron" Glyph="&#xE70D;" FontSize="9"/>
                                 </StackPanel>
-                                <Button.Flyout>
-                                    <MenuFlyout x:Name="ScaleMenu" Opened="OnScaleMenuOpened" Closed="OnScaleMenuClosed">
-                                        <RadioMenuFlyoutItem Text="原始" Tag="0" GroupName="scale" IsChecked="True" Click="OnScaleItem"/>
-                                        <RadioMenuFlyoutItem Text="拉伸" Tag="1" GroupName="scale" Click="OnScaleItem"/>
-                                        <RadioMenuFlyoutItem Text="16:9" Tag="2" GroupName="scale" Click="OnScaleItem"/>
-                                        <RadioMenuFlyoutItem Text="4:3" Tag="3" GroupName="scale" Click="OnScaleItem"/>
-                                        <RadioMenuFlyoutItem Text="填充" Tag="4" GroupName="scale" Click="OnScaleItem"/>
-                                    </MenuFlyout>
-                                </Button.Flyout>
                             </Button>
 
                             <Button x:Name="FlagButton" Background="Transparent"
-                                    BorderThickness="0" Padding="8,6" ToolTipService.ToolTip="切换线路">
+                                    BorderThickness="0" Padding="8,6" ToolTipService.ToolTip="切换线路"
+                                    Click="OnOpenFlagMenu">
                                 <StackPanel Orientation="Horizontal" Spacing="4">
                                     <TextBlock x:Name="FlagText" Text="线路" MaxWidth="120" TextTrimming="CharacterEllipsis"/>
                                     <FontIcon x:Name="FlagChevron" Glyph="&#xE70D;" FontSize="9"/>
                                 </StackPanel>
-                                <Button.Flyout>
-                                    <MenuFlyout x:Name="FlagMenu" Opened="OnFlagMenuOpened" Closed="OnFlagMenuClosed"/>
-                                </Button.Flyout>
                             </Button>
 
                             <Button x:Name="EpisodeButton" Style="{StaticResource PlayerIconButtonStyle}"
                                     Click="OnOpenEpisodePane" ToolTipService.ToolTip="选集">
-                                <FontIcon Glyph="&#xE8FD;" FontSize="15"/>
+                                <FontIcon Glyph="{StaticResource EpisodePickerGlyph}" FontSize="15"/>
                             </Button>
 
-                            <DropDownButton x:Name="CompactMoreButton" Visibility="Collapsed"
-                                            Width="36" Height="36" Padding="0"
-                                            Background="Transparent" BorderThickness="0"
-                                            ToolTipService.ToolTip="更多">
+                            <Button x:Name="CompactMoreButton" Visibility="Collapsed"
+                                    Width="36" Height="36" Padding="0"
+                                    Background="Transparent" BorderThickness="0"
+                                    ToolTipService.ToolTip="更多" Click="OnOpenCompactMoreMenu">
                                 <FontIcon Glyph="&#xE712;" FontSize="15"/>
-                                <DropDownButton.Flyout>
-                                    <MenuFlyout x:Name="CompactMoreMenu">
-                                        <MenuFlyoutItem Text="选集" Click="OnOpenEpisodePane"/>
-                                        <MenuFlyoutSeparator/>
-                                        <MenuFlyoutItem Text="加载本地字幕…" Click="OnPickLocalSubtitle"/>
-                                    </MenuFlyout>
-                                </DropDownButton.Flyout>
-                            </DropDownButton>
+                            </Button>
 
                             <Button x:Name="DanmakuButton" Style="{StaticResource PlayerIconButtonStyle}"
                                     Click="OnDanmakuToggle" ToolTipService.ToolTip="关闭弹幕 (D)">
@@ -374,7 +314,7 @@
 
                             <Button x:Name="SubButton" Width="38" Height="36" Background="Transparent"
                                     BorderThickness="0" Padding="0" IsEnabled="True"
-                                    ToolTipService.ToolTip="字幕">
+                                    ToolTipService.ToolTip="字幕" Click="OnOpenSubtitleMenu">
                                 <StackPanel Orientation="Horizontal" Spacing="2">
                                     <Grid Width="17" Height="17" IsHitTestVisible="False">
                                         <Path Data="M2,3.25 H15 A1,1 0 0 1 16,4.25 V12.75 A1,1 0 0 1 15,13.75 H2 A1,1 0 0 1 1,12.75 V4.25 A1,1 0 0 1 2,3.25 Z"
@@ -385,30 +325,12 @@
                                     </Grid>
                                     <FontIcon x:Name="SubChevron" Glyph="&#xE70D;" FontSize="8"/>
                                 </StackPanel>
-                                <Button.Flyout>
-                                    <MenuFlyout x:Name="SubMenu" Opened="OnSubMenuOpened" Closed="OnSubMenuClosed">
-                                        <MenuFlyoutItem Text="加载本地字幕…" Click="OnPickLocalSubtitle"/>
-                                    </MenuFlyout>
-                                </Button.Flyout>
                             </Button>
 
                             <Button x:Name="GearButton" Background="Transparent" BorderThickness="0" Padding="8,6"
-                                    ToolTipService.ToolTip="播放设置（跳片头尾）">
+                                    ToolTipService.ToolTip="播放设置（跳片头尾）"
+                                    Click="OnOpenSettingsPanel">
                                 <FontIcon Glyph="&#xE713;" FontSize="15"/>
-                                <Button.Flyout>
-                                    <Flyout x:Name="GearFlyout" Opening="OnGearOpening">
-                                        <StackPanel Width="260" Spacing="10">
-                                            <TextBlock Text="跳过片头片尾" FontWeight="SemiBold"/>
-                                            <ToggleSwitch x:Name="SkipToggle" Header="启用自动跳过" Toggled="OnSkipToggled"/>
-                                            <NumberBox x:Name="OpeningBox" Header="片头（秒）" Minimum="0" Maximum="3600"
-                                                       SpinButtonPlacementMode="Compact" ValueChanged="OnOpeningChanged"/>
-                                            <NumberBox x:Name="EndingBox" Header="片尾（秒）" Minimum="0" Maximum="3600"
-                                                       SpinButtonPlacementMode="Compact" ValueChanged="OnEndingChanged"/>
-                                            <TextBlock Text="按当前影片记忆，随历史记录保存。" FontSize="12" TextWrapping="Wrap"
-                                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                                        </StackPanel>
-                                    </Flyout>
-                                </Button.Flyout>
                             </Button>
 
                             <Button x:Name="PipButton" Style="{StaticResource PlayerIconButtonStyle}"
@@ -491,59 +413,35 @@
                                            TextTrimming="CharacterEllipsis"/>
                                 <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="2">
                                     <Button x:Name="CompactSpeedButton" Style="{StaticResource CompactPlayerMenuButtonStyle}"
-                                            ToolTipService.ToolTip="倍速">
+                                            ToolTipService.ToolTip="倍速" Click="OnOpenSpeedMenu">
                                         <StackPanel Orientation="Horizontal" Spacing="3">
                                             <TextBlock x:Name="CompactSpeedText" Text="1x"/>
                                             <FontIcon x:Name="CompactSpeedChevron" Glyph="&#xE70D;" FontSize="8"/>
                                         </StackPanel>
-                                        <Button.Flyout>
-                                            <MenuFlyout x:Name="CompactSpeedMenu" Opened="OnCompactSpeedMenuOpened" Closed="OnCompactSpeedMenuClosed">
-                                                <RadioMenuFlyoutItem Text="1x" Tag="1" GroupName="compact-speed" IsChecked="True" Click="OnSpeedItem"/>
-                                                <RadioMenuFlyoutItem Text="1.25x" Tag="1.25" GroupName="compact-speed" Click="OnSpeedItem"/>
-                                                <RadioMenuFlyoutItem Text="1.5x" Tag="1.5" GroupName="compact-speed" Click="OnSpeedItem"/>
-                                                <RadioMenuFlyoutItem Text="1.75x" Tag="1.75" GroupName="compact-speed" Click="OnSpeedItem"/>
-                                                <RadioMenuFlyoutItem Text="2x" Tag="2" GroupName="compact-speed" Click="OnSpeedItem"/>
-                                                <RadioMenuFlyoutItem Text="2.5x" Tag="2.5" GroupName="compact-speed" Click="OnSpeedItem"/>
-                                                <RadioMenuFlyoutItem Text="3x" Tag="3" GroupName="compact-speed" Click="OnSpeedItem"/>
-                                                <RadioMenuFlyoutItem Text="4x" Tag="4" GroupName="compact-speed" Click="OnSpeedItem"/>
-                                            </MenuFlyout>
-                                        </Button.Flyout>
                                     </Button>
 
                                     <Button x:Name="CompactScaleButton" Visibility="Collapsed"
                                             Style="{StaticResource CompactPlayerMenuButtonStyle}"
-                                            ToolTipService.ToolTip="画面缩放">
+                                            ToolTipService.ToolTip="画面缩放" Click="OnOpenScaleMenu">
                                         <StackPanel Orientation="Horizontal" Spacing="3">
                                             <TextBlock x:Name="CompactScaleText" Text="原始"/>
                                             <FontIcon x:Name="CompactScaleChevron" Glyph="&#xE70D;" FontSize="8"/>
                                         </StackPanel>
-                                        <Button.Flyout>
-                                            <MenuFlyout x:Name="CompactScaleMenu" Opened="OnCompactScaleMenuOpened" Closed="OnCompactScaleMenuClosed">
-                                                <RadioMenuFlyoutItem Text="原始" Tag="0" GroupName="compact-scale" IsChecked="True" Click="OnScaleItem"/>
-                                                <RadioMenuFlyoutItem Text="拉伸" Tag="1" GroupName="compact-scale" Click="OnScaleItem"/>
-                                                <RadioMenuFlyoutItem Text="16:9" Tag="2" GroupName="compact-scale" Click="OnScaleItem"/>
-                                                <RadioMenuFlyoutItem Text="4:3" Tag="3" GroupName="compact-scale" Click="OnScaleItem"/>
-                                                <RadioMenuFlyoutItem Text="填充" Tag="4" GroupName="compact-scale" Click="OnScaleItem"/>
-                                            </MenuFlyout>
-                                        </Button.Flyout>
                                     </Button>
 
                                     <Button x:Name="CompactFlagButton" Visibility="Collapsed"
                                             Style="{StaticResource CompactPlayerMenuButtonStyle}"
-                                            ToolTipService.ToolTip="切换线路">
+                                            ToolTipService.ToolTip="切换线路" Click="OnOpenFlagMenu">
                                         <StackPanel Orientation="Horizontal" Spacing="3">
                                             <TextBlock x:Name="CompactFlagText" Text="线路" MaxWidth="72" TextTrimming="CharacterEllipsis"/>
                                             <FontIcon x:Name="CompactFlagChevron" Glyph="&#xE70D;" FontSize="8"/>
                                         </StackPanel>
-                                        <Button.Flyout>
-                                            <MenuFlyout x:Name="CompactFlagMenu" Opened="OnCompactFlagMenuOpened" Closed="OnCompactFlagMenuClosed"/>
-                                        </Button.Flyout>
                                     </Button>
 
                                     <Button x:Name="CompactEpisodeButton" Visibility="Collapsed"
                                             Style="{StaticResource CompactPlayerIconButtonStyle}"
                                             Click="OnOpenEpisodePane" ToolTipService.ToolTip="选集">
-                                        <FontIcon Glyph="&#xE8FD;" FontSize="14"/>
+                                        <FontIcon Glyph="{StaticResource EpisodePickerGlyph}" FontSize="14"/>
                                     </Button>
 
                                     <Button x:Name="CompactDanmakuButton" Visibility="Collapsed"
@@ -573,7 +471,7 @@
 
                                     <Button x:Name="CompactSubButton" Visibility="Collapsed"
                                             Style="{StaticResource CompactPlayerIconButtonStyle}"
-                                            ToolTipService.ToolTip="字幕">
+                                            ToolTipService.ToolTip="字幕" Click="OnOpenSubtitleMenu">
                                         <StackPanel Orientation="Horizontal" Spacing="1">
                                             <Grid Width="17" Height="17" IsHitTestVisible="False">
                                                 <Path Data="M2,3.25 H15 A1,1 0 0 1 16,4.25 V12.75 A1,1 0 0 1 15,13.75 H2 A1,1 0 0 1 1,12.75 V4.25 A1,1 0 0 1 2,3.25 Z"
@@ -584,16 +482,11 @@
                                             </Grid>
                                             <FontIcon x:Name="CompactSubChevron" Glyph="&#xE70D;" FontSize="7"/>
                                         </StackPanel>
-                                        <Button.Flyout>
-                                            <MenuFlyout x:Name="CompactSubMenu" Opened="OnCompactSubMenuOpened" Closed="OnCompactSubMenuClosed">
-                                                <MenuFlyoutItem Text="加载本地字幕…" Click="OnPickLocalSubtitle"/>
-                                            </MenuFlyout>
-                                        </Button.Flyout>
                                     </Button>
 
                                     <Button x:Name="CompactGearButton" Visibility="Collapsed"
                                             Style="{StaticResource CompactPlayerIconButtonStyle}"
-                                            Click="OnOpenCompactGear" ToolTipService.ToolTip="播放设置">
+                                            Click="OnOpenSettingsPanel" ToolTipService.ToolTip="播放设置">
                                         <FontIcon Glyph="&#xE713;" FontSize="14"/>
                                     </Button>
 
@@ -618,6 +511,116 @@
                         </Grid>
                     </Border>
                 </Grid>
+
+                <!-- Player-owned selection panel. Native MenuFlyout on the video
+                     overlay can crash inside Microsoft.UI.Input.dll. Keeping the
+                     menu in the page visual tree also makes full-screen and PIP
+                     input use the same deterministic path. -->
+                <Grid x:Name="PlayerSelectionOverlay"
+                      Visibility="Collapsed"
+                      Background="Transparent"
+                      Canvas.ZIndex="50"
+                      SizeChanged="OnSelectionOverlaySizeChanged"
+                      Tapped="OnSelectionOverlayTapped">
+                    <Border x:Name="PlayerSelectionPanel"
+                            Width="280"
+                            MaxHeight="420"
+                            Margin="0"
+                            Padding="12"
+                            HorizontalAlignment="Left"
+                            VerticalAlignment="Top"
+                            Background="#F51A1A1A"
+                            BorderBrush="#33FFFFFF"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource SurfaceCornerRadius}"
+                            Translation="0,0,32"
+                            Tapped="OnSelectionPanelTapped">
+                        <Border.Shadow>
+                            <ThemeShadow/>
+                        </Border.Shadow>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid Margin="4,0,0,8">
+                                <TextBlock x:Name="PlayerSelectionTitle"
+                                           FontSize="16"
+                                           FontWeight="SemiBold"
+                                           VerticalAlignment="Center"/>
+                                <Button HorizontalAlignment="Right"
+                                        Width="32" Height="32" Padding="0"
+                                        Background="Transparent" BorderThickness="0"
+                                        Click="OnCloseSelectionPanel"
+                                        ToolTipService.ToolTip="关闭">
+                                    <FontIcon Glyph="&#xE711;" FontSize="13"/>
+                                </Button>
+                            </Grid>
+                            <ListView x:Name="PlayerSelectionList"
+                                      Grid.Row="1"
+                                      MaxHeight="320"
+                                      SelectionMode="Single"
+                                      IsItemClickEnabled="True"
+                                      ItemClick="OnSelectionItemClick">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid MinHeight="38" Padding="6,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Label}"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"/>
+                                            <FontIcon Grid.Column="1"
+                                                      Glyph="{Binding CheckGlyph}"
+                                                      FontSize="13"
+                                                      Margin="12,0,2,0"
+                                                      VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <ScrollViewer x:Name="PlayerSettingsScroller"
+                                          Grid.Row="1"
+                                          MaxHeight="320"
+                                          Visibility="Collapsed"
+                                          HorizontalScrollMode="Disabled"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollMode="Auto"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel Spacing="10" Padding="4,0,4,4">
+                                    <ToggleSwitch x:Name="SkipToggle"
+                                                  Header="启用自动跳过"
+                                                  Toggled="OnSkipToggled"/>
+                                    <NumberBox x:Name="OpeningBox"
+                                               Header="片头（秒）"
+                                               Minimum="0"
+                                               Maximum="3600"
+                                               SpinButtonPlacementMode="Compact"
+                                               ValueChanged="OnOpeningChanged"/>
+                                    <NumberBox x:Name="EndingBox"
+                                               Header="片尾（秒）"
+                                               Minimum="0"
+                                               Maximum="3600"
+                                               SpinButtonPlacementMode="Compact"
+                                               ValueChanged="OnEndingChanged"/>
+                                    <TextBlock Text="按当前影片记忆，随历史记录保存。"
+                                               FontSize="12"
+                                               TextWrapping="Wrap"
+                                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                </StackPanel>
+                            </ScrollViewer>
+                            <Button x:Name="PlayerSelectionAction"
+                                    Grid.Row="2"
+                                    Visibility="Collapsed"
+                                    Margin="0,8,0,0"
+                                    HorizontalAlignment="Stretch"
+                                    Click="OnSelectionActionClick"/>
+                        </Grid>
+                    </Border>
+                </Grid>
             </Grid>
 
             <!-- 轻提示（自动关闭） -->
@@ -639,8 +642,55 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                 <Button Content="返回" HorizontalAlignment="Center" Click="OnBack"/>
             </StackPanel>
-        </Grid>
-    </SplitView>
+            </Grid>
+
+            <!-- Flyleaf binds its swap chain directly to SwapChainPanel, which can
+                 bypass ancestor clips. These opaque inverse-corner shapes sit above
+                 the swap chain and cover only the pixels outside the shared radius. -->
+            <Grid x:Name="PlayerCornerMaskLayer"
+                  IsHitTestVisible="False"
+                  Canvas.ZIndex="100">
+                <Path x:Name="PlayerCornerMaskTopLeft"
+                      Width="8" Height="8"
+                      HorizontalAlignment="Left" VerticalAlignment="Top"
+                      Stretch="Fill"
+                      Data="M 0,0 L 1,0 A 1,1 0 0 0 0,1 Z"
+                      Fill="{ThemeResource ApplicationPageBackgroundThemeBrush}"/>
+                <Path x:Name="PlayerCornerMaskTopRight"
+                      Width="8" Height="8"
+                      HorizontalAlignment="Right" VerticalAlignment="Top"
+                      RenderTransformOrigin="0.5,0.5"
+                      Stretch="Fill"
+                      Data="M 0,0 L 1,0 A 1,1 0 0 0 0,1 Z"
+                      Fill="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                    <Path.RenderTransform>
+                        <RotateTransform Angle="90"/>
+                    </Path.RenderTransform>
+                </Path>
+                <Path x:Name="PlayerCornerMaskBottomRight"
+                      Width="8" Height="8"
+                      HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                      RenderTransformOrigin="0.5,0.5"
+                      Stretch="Fill"
+                      Data="M 0,0 L 1,0 A 1,1 0 0 0 0,1 Z"
+                      Fill="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                    <Path.RenderTransform>
+                        <RotateTransform Angle="180"/>
+                    </Path.RenderTransform>
+                </Path>
+                <Path x:Name="PlayerCornerMaskBottomLeft"
+                      Width="8" Height="8"
+                      HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                      RenderTransformOrigin="0.5,0.5"
+                      Stretch="Fill"
+                      Data="M 0,0 L 1,0 A 1,1 0 0 0 0,1 Z"
+                      Fill="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+                    <Path.RenderTransform>
+                        <RotateTransform Angle="270"/>
+                    </Path.RenderTransform>
+                </Path>
+            </Grid>
+            </Grid>
         </Border>
     </Grid>
 </Page>

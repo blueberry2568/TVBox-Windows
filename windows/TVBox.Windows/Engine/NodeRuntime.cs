@@ -159,10 +159,26 @@ public static class NodeRuntime
                 psi.Environment["NO_PROXY"] = "127.0.0.1,localhost";
             }
 
+            var lifetimeJobReady = ProcessLifetimeJob.TryPrepare(out var lifetimeJobError);
+            if (!lifetimeJobReady)
+            {
+                LastError = "无法建立 Node 进程生命周期保护：" + lifetimeJobError;
+                Logger.E(Tag, LastError);
+                return null;
+            }
+
             candidate = Process.Start(psi);
             if (candidate == null)
             {
                 LastError = "Node 进程启动失败";
+                return null;
+            }
+            if (!ProcessLifetimeJob.TryAssign(candidate, out lifetimeJobError))
+            {
+                LastError = "无法绑定 Node 进程生命周期：" + lifetimeJobError;
+                Logger.E(Tag, LastError);
+                KillNow(candidate);
+                candidate = null;
                 return null;
             }
             _startingProc = candidate;

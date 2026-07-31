@@ -22,7 +22,7 @@
         </DataTemplate>
     </Page.Resources>
 
-    <Grid Padding="24,16,24,0">
+    <Grid Padding="{StaticResource PagePadding}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
@@ -37,13 +37,13 @@
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
-            <Button x:Name="BackButton" Visibility="Collapsed" Width="40" Height="40" Padding="0"
-                    Background="Transparent" BorderThickness="0" Click="OnBack"
+            <Button x:Name="BackButton" Visibility="Collapsed"
+                    Style="{StaticResource PageBackButtonStyle}" Click="OnBack"
                     ToolTipService.ToolTip="返回">
-                <FontIcon Glyph="&#xE72B;" FontSize="16"/>
+                <FontIcon Style="{StaticResource PageBackIconStyle}"/>
             </Button>
-            <TextBlock Grid.Column="1" Text="搜索" FontSize="28" FontWeight="SemiBold"
-                       VerticalAlignment="Center" Margin="8,0,0,0"/>
+            <TextBlock Grid.Column="1" Text="搜索" Style="{StaticResource PageTitleTextStyle}"
+                       VerticalAlignment="Center" Margin="12,0,0,0"/>
         </Grid>
 
         <!-- 搜索框 + 取消 + 站点范围提示 -->

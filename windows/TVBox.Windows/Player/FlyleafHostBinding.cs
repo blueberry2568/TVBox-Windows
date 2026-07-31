@@ -1,6 +1,9 @@
+using System.Numerics;
 using FlyleafLib.Controls.WinUI;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Hosting;
 
 namespace TVBoxForWindows.Player;
 
@@ -10,19 +13,20 @@ public sealed class FlyleafHostBinding : IDisposable
     const string TAG = "FlyleafHostBinding";
 
     readonly FlyleafHost _host;
-    readonly Microsoft.UI.Xaml.Media.SolidColorBrush _blackBackground =
-        new(Microsoft.UI.Colors.Black);
     PlayerCore _core;
     int _generation;
     int _renderWidth;
     int _renderHeight;
+    double _surfaceCornerRadius;
+    Visual _surfaceVisual;
+    CompositionRoundedRectangleGeometry _surfaceClipGeometry;
+    CompositionGeometricClip _surfaceClip;
     bool _queued;
     bool _disposed;
 
     public FlyleafHostBinding(FlyleafHost host)
     {
         _host = host;
-        _host.Background = _blackBackground;
         _host.Loaded += OnLoaded;
         _host.SizeChanged += OnSizeChanged;
     }
@@ -46,6 +50,18 @@ public sealed class FlyleafHostBinding : IDisposable
             _queued = false;
     }
 
+    /// <summary>
+    /// Clips Flyleaf's native swap-chain surface itself. A clip on an ancestor
+    /// XAML element does not reliably constrain SwapChainPanel composition.
+    /// </summary>
+    public void SetSurfaceCornerRadius(double radius)
+    {
+        if (_disposed) return;
+        _surfaceCornerRadius = Math.Max(0, radius);
+        ApplySurfaceClip();
+        RequestSynchronize();
+    }
+
     void OnLoaded(object sender, RoutedEventArgs e) => RequestSynchronize();
 
     void OnSizeChanged(object sender, SizeChangedEventArgs e)
@@ -65,10 +81,12 @@ public sealed class FlyleafHostBinding : IDisposable
             if (!ReferenceEquals(_host.Player, _core.Fly))
             {
                 _host.Player = _core.Fly;
+                ApplySurfaceClip();
                 // Allow FlyleafHost to finish SetupWinUI before applying the video layout.
                 RequestSynchronize();
                 return;
             }
+            ApplySurfaceClip();
             var scpWidth = _host.SCP?.ActualWidth ?? width;
             var scpHeight = _host.SCP?.ActualHeight ?? height;
             var renderWidth = Math.Max(2, (int)Math.Round(scpWidth));
@@ -91,6 +109,58 @@ public sealed class FlyleafHostBinding : IDisposable
         catch (Exception e) { Core.Logger.E(TAG, "同步视频布局失败: " + e.Message); }
     }
 
+    void ApplySurfaceClip()
+    {
+        var surface = _host.SCP;
+        if (surface == null) return;
+
+        var visual = ElementCompositionPreview.GetElementVisual(surface);
+        if (_surfaceCornerRadius <= 0)
+        {
+            visual.Clip = null;
+            return;
+        }
+
+        var width = surface.ActualWidth;
+        var height = surface.ActualHeight;
+        if (width <= 0 || height <= 0) return;
+
+        if (!ReferenceEquals(_surfaceVisual, visual))
+        {
+            _surfaceVisual = visual;
+            _surfaceClipGeometry = visual.Compositor.CreateRoundedRectangleGeometry();
+            _surfaceClip = visual.Compositor.CreateGeometricClip(_surfaceClipGeometry);
+        }
+
+        var offsetX = 0d;
+        var offsetY = 0d;
+        var clipWidth = width;
+        var clipHeight = height;
+        try
+        {
+            var scale = surface.XamlRoot?.RasterizationScale ?? 1d;
+            var origin = surface.TransformToVisual(null)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            var left = Math.Ceiling(origin.X * scale - 0.001d) / scale;
+            var top = Math.Ceiling(origin.Y * scale - 0.001d) / scale;
+            var right = Math.Floor((origin.X + width) * scale + 0.001d) / scale;
+            var bottom = Math.Floor((origin.Y + height) * scale + 0.001d) / scale;
+            if (right > left && bottom > top)
+            {
+                offsetX = left - origin.X;
+                offsetY = top - origin.Y;
+                clipWidth = right - left;
+                clipHeight = bottom - top;
+            }
+        }
+        catch { }
+
+        _surfaceClipGeometry.Offset = new Vector2((float)offsetX, (float)offsetY);
+        _surfaceClipGeometry.Size = new Vector2((float)clipWidth, (float)clipHeight);
+        _surfaceClipGeometry.CornerRadius = new Vector2((float)_surfaceCornerRadius);
+        visual.Clip = _surfaceClip;
+    }
+
     public void Detach()
     {
         if (_disposed) return;
@@ -98,6 +168,7 @@ public sealed class FlyleafHostBinding : IDisposable
         _queued = false;
         _renderWidth = _renderHeight = 0;
         _core = null;
+        if (_surfaceVisual != null) _surfaceVisual.Clip = null;
         try { _host.Player = null; } catch { }
     }
 

@@ -1,7 +1,10 @@
 ﻿using System.ComponentModel;
+using System.Numerics;
+using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
 using Windows.System;
@@ -23,6 +26,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
     LiveGroupItem _currentGroupItem;           // 当前选中分组项
     List<LiveChannel> _allChannels = new();    // 当前直播源全部可见频道（数字选台/上下换台用）
     List<LiveChannelItem> _channelItems = new();
+    List<LiveChannelItem> _channelPickerItems = new();
     CancellationTokenSource _playCts;          // 播放解析取消
     CancellationTokenSource _epgCts;           // 频道列表节目名填充取消
     CancellationTokenSource _liveLoadCts;      // 直播源频道加载取消/代次校验
@@ -37,15 +41,29 @@ public sealed partial class LivePage : Page, INavigationPlayback
     bool _updatingSeek;
     bool _lineAvailable;
     bool _pauseWhenOpened;
+    bool _isNavigatedActive;
+    bool _sourceTransitionInProgress;
+    CompositionRoundedRectangleGeometry _playerAreaClipGeometry;
+    CompositionGeometricClip _playerAreaClip;
+    readonly Microsoft.UI.Xaml.Media.SolidColorBrush _compactCornerMaskBrush =
+        new(Microsoft.UI.Colors.Black);
+    FrameworkElement _linePanelAnchor;
+    FrameworkElement _channelPanelAnchor;
+    int _playGeneration;
+    int _linePanelMutationVersion;
+    int _channelPanelMutationVersion;
+    int _navigationGeneration;
     double _bottomBarWidth;
     long _displayPositionMs;
     long _displayDurationMs;
-    readonly Microsoft.UI.Xaml.Media.Brush _normalSurfaceBackground;
+    readonly Thickness _normalPagePadding;
+    readonly Thickness _normalContentMargin;
 
     public LivePage()
     {
         InitializeComponent();
-        _normalSurfaceBackground = LiveSurface.Background;
+        _normalPagePadding = RootGrid.Padding;
+        _normalContentMargin = MainGrid.Margin;
         _numberTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
         _numberTimer.Tick += (s, e) => CommitNumber();
         _chromeTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
@@ -71,38 +89,65 @@ public sealed partial class LivePage : Page, INavigationPlayback
     protected override async void OnNavigatedTo(NavigationEventArgs e)
     {
         base.OnNavigatedTo(e);
+        _isNavigatedActive = true;
+        var navigationGeneration = ++_navigationGeneration;
         InitPlayer();
+        GuidePanel.Visibility = Visibility.Collapsed;
+        GuideInfo.IsOpen = false;
+
+        // A saved video configuration can populate embedded live sources during
+        // startup. Wait for that one-time restore before deciding this is an empty
+        // live installation, otherwise the source guide flashes over valid content.
+        await App.Main.InitialVodRestoreTask;
+        if (!_isNavigatedActive || navigationGeneration != _navigationGeneration) return;
+
         LiveConfigService.Instance.Loaded += OnConfigLoaded;
         if (LiveConfigService.Instance.Lives.Count > 0)
         {
+            GuidePanel.Visibility = Visibility.Collapsed;
             RefreshLives();
             return;
         }
 
-        var address = Setting.ConfigLive?.Trim();
+        var config = Stores.ResolveConfig(Setting.ConfigLive, 1);
+        var address = config?.Url?.Trim();
         GuideUrlBox.Text = address ?? "";
-        if (!string.IsNullOrEmpty(address)) await LoadGuideAddress(address, false);
+        if (!string.IsNullOrEmpty(address))
+        {
+            if (!string.Equals(Setting.ConfigLive, address, StringComparison.OrdinalIgnoreCase))
+                Setting.ConfigLive = address;
+            await LoadGuideAddress(address, false);
+        }
         else GuidePanel.Visibility = Visibility.Visible;
     }
 
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
+        _isNavigatedActive = false;
+        _navigationGeneration++;
         LiveConfigService.Instance.Loaded -= OnConfigLoaded;
+        _linePanelMutationVersion++;
+        _channelPanelMutationVersion++;
         InvalidateLiveLoad();
-        _playCts?.Cancel();
+        CancelPlayRequest();
         _epgCts?.Cancel();
+        CloseChannelPanel(false);
+        CloseLinePanel(false);
         _numberTimer.Stop();
         _chromeTimer.Stop();
         _programTimer.Stop();
         if (_fullscreen || _compact)
         {
+            try { App.Main.RestorePlaybackWindow(); } catch { }
             _fullscreen = _compact = false;
             ApplyPresentationMode();
-            try { App.Main.RestorePlaybackWindow(); } catch { }
         }
         else App.Main.SetImmersive(false);
-        _hostBinding?.Dispose();
+        if (_hostBinding != null)
+        {
+            _hostBinding.Dispose();
+        }
         _hostBinding = null;
         if (_core != null)
         {
@@ -149,7 +194,14 @@ public sealed partial class LivePage : Page, INavigationPlayback
     {
         App.Post(() =>
         {
+            if (!_isNavigatedActive) return;
+            if (_sourceTransitionInProgress && _playCts != null)
+            {
+                Logger.D("LivePage", "已忽略新频道解析期间旧媒体的打开事件");
+                return;
+            }
             LoadingRing.IsActive = false;
+            SetSourceTransition(false);
             if (_pauseWhenOpened && _core?.IsPlaying == true) _core.PlayPause();
             _hostBinding?.RequestSynchronize();
             UpdateLivePlayPauseIcon();
@@ -160,8 +212,15 @@ public sealed partial class LivePage : Page, INavigationPlayback
     {
         App.Post(() =>
         {
+            if (!_isNavigatedActive) return;
+            if (_sourceTransitionInProgress && _playCts != null)
+            {
+                Logger.D("LivePage", "已忽略新频道解析期间旧媒体的错误: " + message);
+                return;
+            }
             LoadingRing.IsActive = false;
             LiveBufferBar.IsIndeterminate = false;
+            SetSourceTransition(false);
             UpdateLivePlayPauseIcon();
             ShowInfo("播放错误：" + message, InfoBarSeverity.Error);
         });
@@ -169,7 +228,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
 
     void OnCoreTime(long positionMs)
     {
-        if (_core == null) return;
+        if (!_isNavigatedActive || _core == null) return;
         var durationMs = _core.DurationMs;
         _displayPositionMs = Math.Max(0, positionMs);
         _displayDurationMs = Math.Max(0, durationMs);
@@ -202,6 +261,10 @@ public sealed partial class LivePage : Page, INavigationPlayback
 
     public void PauseForNavigation()
     {
+        _linePanelMutationVersion++;
+        _channelPanelMutationVersion++;
+        CloseChannelPanel(false);
+        CloseLinePanel(false);
         _pauseWhenOpened = true;
         if (_core?.IsPlaying == true) _core.PlayPause();
         _core?.SetUiUpdatesEnabled(false);
@@ -265,7 +328,9 @@ public sealed partial class LivePage : Page, INavigationPlayback
             return;
         }
 
-        GuidePanel.Visibility = Visibility.Visible;
+        // Automatic startup restore stays behind the existing live layout. The
+        // guide is only shown immediately for an explicit user-initiated load.
+        GuidePanel.Visibility = showSuccess ? Visibility.Visible : Visibility.Collapsed;
         GuideInfo.IsOpen = false;
         GuideLoadButton.IsEnabled = false;
         try
@@ -275,6 +340,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
         }
         catch (Exception ex)
         {
+            if (!_isNavigatedActive || LiveConfigService.Instance.Lives.Count > 0) return;
+            GuidePanel.Visibility = Visibility.Visible;
             GuideInfo.Severity = InfoBarSeverity.Error;
             GuideInfo.Message = "直播配置加载失败：" + ex.Message;
             GuideInfo.IsOpen = true;
@@ -290,8 +357,13 @@ public sealed partial class LivePage : Page, INavigationPlayback
         {
             LoadingRing.IsActive = false;
             _live = null;
+            _current = null;
+            _currentItem = null;
+            _allChannels.Clear();
+            RebuildChannelPickerItems();
             GroupList.ItemsSource = null;
             ChannelList.ItemsSource = null;
+            UpdateLineButton();
             GuidePanel.Visibility = Visibility.Visible;
             return;
         }
@@ -374,6 +446,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
             if (group.IsHidden && !group.Unlocked) continue;
             _allChannels.AddRange(group.Channel);
         }
+        RebuildChannelPickerItems();
     }
 
     // ---------- 分组与密码 ----------
@@ -434,6 +507,163 @@ public sealed partial class LivePage : Page, INavigationPlayback
         _epgCts?.Cancel();
         _epgCts = new CancellationTokenSource();
         _ = FillNowPlaying(_channelItems, _epgCts.Token);
+    }
+
+    void RebuildChannelPickerItems()
+    {
+        var keeps = LiveSetting.Keeps;
+        _channelPickerItems = _allChannels
+            .Select(channel => new LiveChannelItem(channel) { IsKeep = keeps.Contains(KeepKey(channel)) })
+            .ToList();
+        ChannelPaneList.ItemsSource = _channelPickerItems;
+        SyncChannelPaneSelection(false);
+        UpdateSourceControlAvailability();
+    }
+
+    void SyncChannelPaneSelection(bool scrollIntoView)
+    {
+        var selected = _channelPickerItems.FirstOrDefault(item => ReferenceEquals(item.Channel, _current));
+        foreach (var item in _channelPickerItems)
+            item.IsCurrent = ReferenceEquals(item, selected);
+        ChannelPaneList.SelectedItem = selected;
+        if (scrollIntoView && selected != null)
+        {
+            try { ChannelPaneList.ScrollIntoView(selected); } catch { }
+        }
+    }
+
+    void OnOpenChannelPane(object sender, RoutedEventArgs e)
+    {
+        var anchor = sender as FrameworkElement;
+        QueueChannelPanelMutation(() => OpenChannelPanelCore(anchor));
+    }
+
+    void OpenChannelPanelCore(FrameworkElement anchor)
+    {
+        if (LiveChannelOverlay.Visibility == Visibility.Visible)
+        {
+            CloseChannelPanel();
+            return;
+        }
+        if (_channelPickerItems.Count == 0) return;
+
+        _linePanelMutationVersion++;
+        CloseLinePanel(false);
+        _channelPanelAnchor = anchor ?? ChannelButton;
+        RefreshChannelPanel(false);
+        LiveChannelOverlay.Opacity = 0;
+        LiveChannelOverlay.Visibility = Visibility.Visible;
+        LiveChannelOverlay.UpdateLayout();
+        SyncChannelPaneSelection(true);
+        PositionChannelPanel();
+        LiveChannelOverlay.Opacity = 1;
+        ShowPlayerChrome();
+    }
+
+    void RefreshChannelPanel(bool scrollIntoView)
+    {
+        ChannelPaneList.ItemsSource = _channelPickerItems;
+        SyncChannelPaneSelection(scrollIntoView);
+    }
+
+    void PositionChannelPanel()
+    {
+        if (LiveChannelOverlay.Visibility != Visibility.Visible) return;
+
+        const double edge = 12;
+        const double gap = 8;
+        var overlayWidth = LiveChannelOverlay.ActualWidth > 0
+            ? LiveChannelOverlay.ActualWidth
+            : PlayerArea.ActualWidth;
+        var overlayHeight = LiveChannelOverlay.ActualHeight > 0
+            ? LiveChannelOverlay.ActualHeight
+            : PlayerArea.ActualHeight;
+        if (overlayWidth <= 0 || overlayHeight <= 0) return;
+
+        var panelWidth = Math.Min(280, Math.Max(1, overlayWidth - edge * 2));
+        var anchor = _channelPanelAnchor ?? ChannelButton;
+        double anchorLeft;
+        double anchorTop;
+        double anchorWidth;
+        try
+        {
+            if (anchor == null || anchor.ActualWidth <= 0)
+                throw new InvalidOperationException();
+            var point = anchor.TransformToVisual(LiveChannelOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            anchorLeft = point.X;
+            anchorTop = point.Y;
+            anchorWidth = anchor.ActualWidth;
+        }
+        catch
+        {
+            anchorLeft = overlayWidth - edge - panelWidth;
+            anchorTop = overlayHeight - (_compact ? 74 : 112);
+            anchorWidth = panelWidth;
+        }
+
+        var availableHeight = Math.Max(1, anchorTop - edge - gap);
+        var panelMaxHeight = Math.Min(420, availableHeight);
+        LiveChannelPanel.Width = panelWidth;
+        LiveChannelPanel.MaxHeight = panelMaxHeight;
+        LiveChannelPanel.Margin = new Thickness(0);
+        LiveChannelPanel.Measure(new Windows.Foundation.Size(panelWidth, panelMaxHeight));
+
+        var panelHeight = Math.Min(panelMaxHeight, Math.Max(1, LiveChannelPanel.DesiredSize.Height));
+        var left = anchorLeft + (anchorWidth - panelWidth) / 2;
+        left = Math.Clamp(left, edge, Math.Max(edge, overlayWidth - panelWidth - edge));
+        var top = Math.Max(edge, anchorTop - gap - panelHeight);
+        LiveChannelPanel.Margin = new Thickness(left, top, 0, 0);
+    }
+
+    void OnChannelOverlaySizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (LiveChannelOverlay.Visibility == Visibility.Visible) PositionChannelPanel();
+    }
+
+    void OnChannelOverlayTapped(object sender, TappedRoutedEventArgs e)
+    {
+        QueueChannelPanelMutation(() => CloseChannelPanel());
+        e.Handled = true;
+    }
+
+    void OnChannelPanelTapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+
+    void OnCloseChannelPane(object sender, RoutedEventArgs e) =>
+        QueueChannelPanelMutation(() => CloseChannelPanel());
+
+    void CloseChannelPanel(bool showChrome = true)
+    {
+        if (LiveChannelOverlay.Visibility != Visibility.Visible) return;
+        LiveChannelOverlay.Visibility = Visibility.Collapsed;
+        _channelPanelAnchor = null;
+        ChannelPaneList.ItemsSource = null;
+        if (showChrome) ShowPlayerChrome();
+    }
+
+    void QueueChannelPanelMutation(Action mutation)
+    {
+        var version = ++_channelPanelMutationVersion;
+        void CommitMutation()
+        {
+            if (!_isNavigatedActive || version != _channelPanelMutationVersion) return;
+            mutation();
+        }
+        DispatcherQueue?.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            CommitMutation);
+    }
+
+    void OnChannelPaneItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not LiveChannelItem item) return;
+        var channel = item.Channel;
+        QueueChannelPanelMutation(() =>
+        {
+            CloseChannelPanel();
+            if (channel == null || !_allChannels.Contains(channel) || ReferenceEquals(channel, _current)) return;
+            PlayByChannel(channel);
+        });
     }
 
     /// <summary>逐个异步填充「当前节目名」（EpgService 内部有缓存，串行避免拥塞）。</summary>
@@ -509,47 +739,89 @@ public sealed partial class LivePage : Page, INavigationPlayback
 
     // ---------- 播放 ----------
 
-    async void PlayChannel(LiveChannelItem item)
+    void PlayChannel(LiveChannelItem item)
     {
         if (item == null) return;
+        _ = PlayChannelAsync(item);
+    }
+
+    async Task PlayChannelAsync(LiveChannelItem item)
+    {
+        if (item == null || !_isNavigatedActive) return;
         _pauseWhenOpened = false;
         if (_core == null) { InitPlayer(); if (_core == null) return; }
-        _currentItem = item;
-        _current = item.Channel;
-        ChannelNameText.Text = item.Channel.Name;
-        ProgramText.Text = item.NowText;
-        NextProgramTopText.Visibility = Visibility.Collapsed;
-        UpdateLineButton();
-        PlayInfo.IsOpen = false;
-        LoadingRing.IsActive = true;
-        _updatingSeek = true;
-        LiveProgressRow.Visibility = Visibility.Collapsed;
-        LiveBufferBar.IsIndeterminate = false;
-        LiveBufferBar.Value = 0;
-        LiveSeekSlider.Value = 0;
-        _updatingSeek = false;
-        _displayPositionMs = _displayDurationMs = 0;
-        UpdateLiveTimeLabel();
-        _playCts?.Cancel();
-        _playCts = new CancellationTokenSource();
-        var ct = _playCts.Token;
+        var cts = StartPlayRequest(out var generation);
+        var ct = cts.Token;
         try
         {
+            // Cancel both resolver work and a Flyleaf open that may already have
+            // started for the previous channel before resolving the new address.
+            _core.Stop();
+            SetSourceTransition(true);
+            _currentItem = item;
+            _current = item.Channel;
+            SyncChannelPaneSelection(false);
+            ChannelNameText.Text = item.Channel.Name;
+            ProgramText.Text = item.NowText;
+            NextProgramTopText.Visibility = Visibility.Collapsed;
+            UpdateLineButton();
+            PlayInfo.IsOpen = false;
+            LoadingRing.IsActive = true;
+            _updatingSeek = true;
+            LiveProgressRow.Visibility = Visibility.Collapsed;
+            LiveBufferBar.IsIndeterminate = false;
+            LiveBufferBar.Value = 0;
+            LiveSeekSlider.Value = 0;
+            _updatingSeek = false;
+            _displayPositionMs = _displayDurationMs = 0;
+            UpdateLiveTimeLabel();
             var play = await PlayResolver.ResolveLive(item.Channel, ct);
-            if (ct.IsCancellationRequested) return;
+            if (!IsCurrentPlayRequest(cts, generation)) return;
             _core.Open(play);
+            _ = UpdateProgramAsync(item);
+            _programTimer.Stop();
+            _programTimer.Start();
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception ex)
         {
-            if (!ct.IsCancellationRequested)
+            if (IsCurrentPlayRequest(cts, generation))
             {
                 LoadingRing.IsActive = false;
+                SetSourceTransition(false);
                 ShowInfo("播放失败：" + ex.Message, InfoBarSeverity.Error);
             }
         }
-        _ = UpdateProgramAsync(item);
-        _programTimer.Stop();
-        _programTimer.Start();
+        finally
+        {
+            if (ReferenceEquals(_playCts, cts)) _playCts = null;
+            cts.Dispose();
+        }
+    }
+
+    CancellationTokenSource StartPlayRequest(out int generation)
+    {
+        var previous = _playCts;
+        var current = new CancellationTokenSource();
+        _playCts = current;
+        generation = ++_playGeneration;
+        try { previous?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        return current;
+    }
+
+    bool IsCurrentPlayRequest(CancellationTokenSource cts, int generation) =>
+        _isNavigatedActive && !cts.IsCancellationRequested && generation == _playGeneration &&
+        ReferenceEquals(_playCts, cts) && _core != null;
+
+    void CancelPlayRequest()
+    {
+        _playGeneration++;
+        var current = _playCts;
+        _playCts = null;
+        try { current?.Cancel(); }
+        catch (ObjectDisposedException) { }
+        finally { current?.Dispose(); }
     }
 
     async Task UpdateProgramAsync(LiveChannelItem item)
@@ -565,6 +837,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
                 .FirstOrDefault();
             App.Post(() =>
             {
+                if (!_isNavigatedActive) return;
                 item.NowText = now?.Title ?? "";
                 if (_currentItem == item) UpdateProgramDisplay(now, next);
             });
@@ -667,6 +940,9 @@ public sealed partial class LivePage : Page, INavigationPlayback
     {
         var width = _bottomBarWidth > 0 ? _bottomBarWidth : BottomBar.ActualWidth;
         var compact = _compact;
+        ChannelButton.Visibility = !compact || width >= 360
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         LineButton.Visibility = _lineAvailable && (!compact || width >= 440)
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -675,42 +951,190 @@ public sealed partial class LivePage : Page, INavigationPlayback
         UpdateLiveTimeLabel();
     }
 
-    void OnLineItemClick(object sender, RoutedEventArgs e)
+    void SetSourceTransition(bool inProgress)
     {
-        var ch = _current;
-        if (ch == null || sender is not FrameworkElement item || item.Tag is not int index) return;
-        if (index < 0 || index >= ch.Urls.Count || index == ch.UrlIndex) return;
-        ch.UrlIndex = index;
-        UpdateLineButton();
-        if (_currentItem != null) PlayChannel(_currentItem);
+        _sourceTransitionInProgress = inProgress;
+        UpdateSourceControlAvailability();
     }
 
-    void OnLineMenuOpened(object sender, object e) => LineChevron.Glyph = "\uE70E";
+    void UpdateSourceControlAvailability()
+    {
+        var hasChannels = _allChannels.Count > 0;
+        ChannelList.IsEnabled = hasChannels;
+        ChannelPaneList.IsEnabled = hasChannels;
+        ChannelButton.IsEnabled = hasChannels;
+        PrevChannelButton.IsEnabled = hasChannels;
+        NextChannelButton.IsEnabled = hasChannels;
+        LineButton.IsEnabled = !_sourceTransitionInProgress && _lineAvailable;
+    }
 
-    void OnLineMenuClosed(object sender, object e) => LineChevron.Glyph = "\uE70D";
+    void OnOpenLinePanel(object sender, RoutedEventArgs e)
+    {
+        var anchor = sender as FrameworkElement;
+        QueueLinePanelMutation(() => OpenLinePanelCore(anchor));
+    }
+
+    void OpenLinePanelCore(FrameworkElement anchor)
+    {
+        if (LiveLineOverlay.Visibility == Visibility.Visible)
+        {
+            CloseLinePanel();
+            return;
+        }
+
+        var channel = _current;
+        if (_sourceTransitionInProgress || channel == null || channel.Urls.Count <= 1) return;
+        _channelPanelMutationVersion++;
+        CloseChannelPanel(false);
+        _linePanelAnchor = anchor ?? LineButton;
+        RefreshLinePanel();
+        LiveLineOverlay.Opacity = 0;
+        LiveLineOverlay.Visibility = Visibility.Visible;
+        LiveLineOverlay.UpdateLayout();
+        PositionLinePanel();
+        LiveLineOverlay.Opacity = 1;
+        LineChevron.Glyph = "\uE70E";
+        ShowPlayerChrome();
+    }
+
+    void PositionLinePanel()
+    {
+        if (LiveLineOverlay.Visibility != Visibility.Visible) return;
+
+        const double edge = 12;
+        const double gap = 8;
+        var overlayWidth = LiveLineOverlay.ActualWidth > 0
+            ? LiveLineOverlay.ActualWidth
+            : PlayerArea.ActualWidth;
+        var overlayHeight = LiveLineOverlay.ActualHeight > 0
+            ? LiveLineOverlay.ActualHeight
+            : PlayerArea.ActualHeight;
+        if (overlayWidth <= 0 || overlayHeight <= 0) return;
+
+        var panelWidth = Math.Min(260, Math.Max(1, overlayWidth - edge * 2));
+        var anchor = _linePanelAnchor ?? LineButton;
+        double anchorLeft;
+        double anchorTop;
+        double anchorWidth;
+        try
+        {
+            if (anchor == null || anchor.ActualWidth <= 0)
+                throw new InvalidOperationException();
+            var point = anchor.TransformToVisual(LiveLineOverlay)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            anchorLeft = point.X;
+            anchorTop = point.Y;
+            anchorWidth = anchor.ActualWidth;
+        }
+        catch
+        {
+            anchorLeft = overlayWidth - edge - panelWidth;
+            anchorTop = overlayHeight - (_compact ? 74 : 112);
+            anchorWidth = panelWidth;
+        }
+
+        var availableHeight = Math.Max(1, anchorTop - edge - gap);
+        var panelMaxHeight = Math.Min(380, availableHeight);
+        LiveLinePanel.Width = panelWidth;
+        LiveLinePanel.MaxHeight = panelMaxHeight;
+        LiveLinePanel.Margin = new Thickness(0);
+        LiveLinePanel.Measure(new Windows.Foundation.Size(panelWidth, panelMaxHeight));
+
+        var panelHeight = Math.Min(panelMaxHeight, Math.Max(1, LiveLinePanel.DesiredSize.Height));
+        var left = anchorLeft + (anchorWidth - panelWidth) / 2;
+        left = Math.Clamp(left, edge, Math.Max(edge, overlayWidth - panelWidth - edge));
+        var top = Math.Max(edge, anchorTop - gap - panelHeight);
+        LiveLinePanel.Margin = new Thickness(left, top, 0, 0);
+    }
+
+    void OnLineOverlaySizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (LiveLineOverlay.Visibility == Visibility.Visible) PositionLinePanel();
+    }
+
+    void RefreshLinePanel()
+    {
+        var channel = _current;
+        var items = channel == null
+            ? new List<LiveLineSelectionItem>()
+            : channel.Urls.Select((_, index) => new LiveLineSelectionItem(
+                channel.CurrentLineName(index), index, index == channel.UrlIndex)).ToList();
+        LiveLineList.ItemsSource = items;
+        LiveLineList.SelectedItem = items.FirstOrDefault(item => item.IsSelected);
+    }
+
+    void OnLinePanelItemClick(object sender, ItemClickEventArgs e)
+    {
+        if (e.ClickedItem is not LiveLineSelectionItem item) return;
+        var channel = _current;
+        var index = item.Index;
+        QueueLinePanelMutation(() =>
+        {
+            CloseLinePanel();
+            if (channel == null || !ReferenceEquals(channel, _current) ||
+                index < 0 || index >= channel.Urls.Count || index == channel.UrlIndex)
+            {
+                return;
+            }
+
+            var currentItem = _currentItem;
+            if (currentItem == null || !ReferenceEquals(currentItem.Channel, channel)) return;
+            channel.UrlIndex = index;
+            UpdateLineButton();
+            PlayChannel(currentItem);
+        });
+    }
+
+    // Keep overlay collapse/rebinding out of the WinUI routed-input stack.
+    void QueueLinePanelMutation(Action mutation)
+    {
+        var version = ++_linePanelMutationVersion;
+        void CommitMutation()
+        {
+            if (!_isNavigatedActive || version != _linePanelMutationVersion) return;
+            mutation();
+        }
+        DispatcherQueue?.TryEnqueue(
+            Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
+            CommitMutation);
+    }
+
+    void OnLineOverlayTapped(object sender, TappedRoutedEventArgs e)
+    {
+        QueueLinePanelMutation(() => CloseLinePanel());
+        e.Handled = true;
+    }
+
+    void OnLinePanelTapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+
+    void OnCloseLinePanel(object sender, RoutedEventArgs e) =>
+        QueueLinePanelMutation(() => CloseLinePanel());
+
+    void CloseLinePanel(bool showChrome = true)
+    {
+        if (LiveLineOverlay.Visibility != Visibility.Visible) return;
+        LiveLineOverlay.Visibility = Visibility.Collapsed;
+        _linePanelAnchor = null;
+        LiveLineList.ItemsSource = null;
+        LineChevron.Glyph = "\uE70D";
+        if (showChrome) ShowPlayerChrome();
+    }
 
     void UpdateLineButton()
     {
         var ch = _current;
         _lineAvailable = ch != null && ch.Urls.Count > 1;
-        if (ch != null && ch.Urls.Count > 0) LineText.Text = ch.CurrentLineName(ch.UrlIndex);
-        LineMenu.Items.Clear();
-        if (ch != null)
+        LineText.Text = ch != null && ch.Urls.Count > 0 ? ch.CurrentLineName(ch.UrlIndex) : "线路";
+        if (LiveLineOverlay.Visibility == Visibility.Visible)
         {
-            for (var i = 0; i < ch.Urls.Count; i++)
+            QueueLinePanelMutation(() =>
             {
-                var item = new RadioMenuFlyoutItem
-                {
-                    Text = ch.CurrentLineName(i),
-                    Tag = i,
-                    GroupName = "live-lines",
-                    IsChecked = i == ch.UrlIndex,
-                };
-                item.Click += OnLineItemClick;
-                LineMenu.Items.Add(item);
-            }
+                if (LiveLineOverlay.Visibility != Visibility.Visible) return;
+                if (_lineAvailable) RefreshLinePanel();
+                else CloseLinePanel(false);
+            });
         }
-        LineButton.IsEnabled = _lineAvailable;
+        UpdateSourceControlAvailability();
         UpdateBottomBarLayout();
     }
 
@@ -731,19 +1155,43 @@ public sealed partial class LivePage : Page, INavigationPlayback
         App.Main.BeginCompactDrag();
     }
 
-    void OnPlayerDoubleTapped(object sender, DoubleTappedRoutedEventArgs e) => ToggleFullscreen();
+    void OnPlayerDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (LiveLineOverlay.Visibility == Visibility.Visible)
+        {
+            QueueLinePanelMutation(() =>
+            {
+                CloseLinePanel(false);
+                ToggleFullscreen();
+            });
+        }
+        else if (LiveChannelOverlay.Visibility == Visibility.Visible)
+        {
+            QueueChannelPanelMutation(() =>
+            {
+                CloseChannelPanel(false);
+                ToggleFullscreen();
+            });
+        }
+        else ToggleFullscreen();
+        e.Handled = true;
+    }
 
     void OnFullClick(object sender, RoutedEventArgs e) => ToggleFullscreen();
 
     void ToggleFullscreen()
     {
+        _channelPanelMutationVersion++;
+        _linePanelMutationVersion++;
+        CloseChannelPanel(false);
+        CloseLinePanel(false);
         var entering = !_fullscreen;
-        _fullscreen = entering;
-        if (entering) _compact = false;
-        if (entering) ApplyPresentationMode();
-        try
+        if (entering)
         {
-            if (_fullscreen)
+            _fullscreen = true;
+            _compact = false;
+            ApplyPresentationMode();
+            try
             {
                 if (!App.Main.EnterPlaybackFullScreen())
                 {
@@ -751,13 +1199,18 @@ public sealed partial class LivePage : Page, INavigationPlayback
                     ApplyPresentationMode();
                 }
             }
-            else
+            catch
             {
+                _fullscreen = false;
                 ApplyPresentationMode();
-                App.Main.RestorePlaybackWindow();
             }
         }
-        catch { }
+        else
+        {
+            if (!App.Main.RestorePlaybackWindow()) return;
+            _fullscreen = false;
+            ApplyPresentationMode();
+        }
         if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
         ShowPlayerChrome();
         _hostBinding?.RequestSynchronize();
@@ -766,13 +1219,17 @@ public sealed partial class LivePage : Page, INavigationPlayback
 
     void OnLivePip(object sender, RoutedEventArgs e)
     {
+        _channelPanelMutationVersion++;
+        _linePanelMutationVersion++;
+        CloseChannelPanel(false);
+        CloseLinePanel(false);
         var entering = !_compact;
-        _compact = entering;
-        if (entering) _fullscreen = false;
-        if (entering) ApplyPresentationMode();
-        try
+        if (entering)
         {
-            if (_compact)
+            _compact = true;
+            _fullscreen = false;
+            ApplyPresentationMode();
+            try
             {
                 if (!App.Main.EnterPlaybackCompact())
                 {
@@ -780,14 +1237,19 @@ public sealed partial class LivePage : Page, INavigationPlayback
                     ApplyPresentationMode();
                 }
             }
-            else
+            catch
             {
+                _compact = false;
                 ApplyPresentationMode();
-                App.Main.RestorePlaybackWindow();
             }
         }
-        catch { }
-        if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
+        else
+        {
+            if (!App.Main.RestorePlaybackWindow()) return;
+            _compact = false;
+            ApplyPresentationMode();
+        }
+        if (entering && _compact) App.Main.RefreshImmersiveFrame(_fullscreen);
         ShowPlayerChrome();
         _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
@@ -796,6 +1258,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
     void ApplyPresentationMode()
     {
         var immersive = _fullscreen || _compact;
+        PageHeader.Visibility = immersive ? Visibility.Collapsed : Visibility.Visible;
         LeftPane.Visibility = immersive ? Visibility.Collapsed : Visibility.Visible;
         MidPane.Visibility = immersive ? Visibility.Collapsed : Visibility.Visible;
         if (immersive)
@@ -805,15 +1268,15 @@ public sealed partial class LivePage : Page, INavigationPlayback
         }
         else UpdatePaneWidths(ActualWidth);
 
-        RootGrid.Padding = immersive ? new Thickness(0) : new Thickness(16);
-        RootGrid.Background = immersive
+        RootGrid.Padding = immersive ? new Thickness(0) : _normalPagePadding;
+        MainGrid.Margin = immersive ? new Thickness(0) : _normalContentMargin;
+        RootGrid.Background = _fullscreen
             ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black)
             : null;
-        LiveSurface.Background = immersive
-            ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Black)
-            : _normalSurfaceBackground;
-        LiveSurface.CornerRadius = immersive ? new CornerRadius(0) : new CornerRadius(8);
-        LiveSurface.BorderThickness = immersive ? new Thickness(0) : new Thickness(1);
+        LivePlayerSurface.Margin = immersive
+            ? new Thickness(0)
+            : (Thickness)Application.Current.Resources["LivePlayerSurfaceMargin"];
+        UpdatePlayerAreaClip();
         TopBar.Padding = _compact ? new Thickness(10, 8, 10, 22) : new Thickness(20, 16, 20, 28);
         BottomBar.Padding = _compact ? new Thickness(8, 32, 8, 8) : new Thickness(20, 52, 20, 14);
         LiveFullIcon.Glyph = _fullscreen ? "\uE73F" : "\uE740";
@@ -826,9 +1289,95 @@ public sealed partial class LivePage : Page, INavigationPlayback
         _core?.SetViewportFill(_fullscreen);
         App.Main.SetImmersive(immersive);
         UpdateBottomBarLayout();
-        DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low,
-            () => _hostBinding?.RequestSynchronize());
+        DispatcherQueue?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            UpdatePlayerAreaClip();
+            _hostBinding?.RequestSynchronize();
+        });
     }
+
+    void OnPlayerAreaSizeChanged(object sender, SizeChangedEventArgs e) => UpdatePlayerAreaClip();
+
+    void UpdatePlayerAreaClip()
+    {
+        UpdateCornerMaskLayer();
+        var visual = ElementCompositionPreview.GetElementVisual(PlayerArea);
+        if (_fullscreen)
+        {
+            visual.Clip = null;
+            _hostBinding?.SetSurfaceCornerRadius(0);
+            return;
+        }
+
+        var width = PlayerArea.ActualWidth;
+        var height = PlayerArea.ActualHeight;
+        if (width <= 0 || height <= 0)
+        {
+            visual.Clip = null;
+            return;
+        }
+
+        var offsetX = 0d;
+        var offsetY = 0d;
+        var clipWidth = width;
+        var clipHeight = height;
+        try
+        {
+            var scale = XamlRoot?.RasterizationScale ?? 1d;
+            var origin = PlayerArea.TransformToVisual(null)
+                .TransformPoint(new Windows.Foundation.Point(0, 0));
+            var left = Math.Ceiling(origin.X * scale - 0.001d) / scale;
+            var top = Math.Ceiling(origin.Y * scale - 0.001d) / scale;
+            var right = Math.Floor((origin.X + width) * scale + 0.001d) / scale;
+            var bottom = Math.Floor((origin.Y + height) * scale + 0.001d) / scale;
+            if (right > left && bottom > top)
+            {
+                offsetX = left - origin.X;
+                offsetY = top - origin.Y;
+                clipWidth = right - left;
+                clipHeight = bottom - top;
+            }
+        }
+        catch { }
+
+        _playerAreaClipGeometry ??= visual.Compositor.CreateRoundedRectangleGeometry();
+        _playerAreaClip ??= visual.Compositor.CreateGeometricClip(_playerAreaClipGeometry);
+        _playerAreaClipGeometry.Offset = new Vector2((float)offsetX, (float)offsetY);
+        _playerAreaClipGeometry.Size = new Vector2((float)clipWidth, (float)clipHeight);
+        var radius = (float)SurfaceCornerRadius().TopLeft;
+        _playerAreaClipGeometry.CornerRadius = new Vector2(radius);
+        visual.Clip = _playerAreaClip;
+        _hostBinding?.SetSurfaceCornerRadius(radius);
+    }
+
+    void UpdateCornerMaskLayer()
+    {
+        LiveCornerMaskLayer.Visibility = _fullscreen
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        var radius = Math.Max(0, SurfaceCornerRadius().TopLeft);
+        var fill = _compact
+            ? _compactCornerMaskBrush
+            : Application.Current.Resources["LayerOnMicaBaseAltFillColorTertiaryBrush"]
+                as Microsoft.UI.Xaml.Media.Brush;
+        foreach (var corner in new Microsoft.UI.Xaml.Shapes.Path[]
+        {
+            LiveCornerMaskTopLeft,
+            LiveCornerMaskTopRight,
+            LiveCornerMaskBottomRight,
+            LiveCornerMaskBottomLeft,
+        })
+        {
+            corner.Width = radius;
+            corner.Height = radius;
+            if (fill != null) corner.Fill = fill;
+        }
+    }
+
+    static CornerRadius SurfaceCornerRadius() =>
+        Application.Current.Resources["SurfaceCornerRadius"] is CornerRadius radius
+            ? radius
+            : new CornerRadius(8);
 
     void UpdatePaneWidths(double width)
     {
@@ -864,6 +1413,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
     {
         _chromeTimer.Stop();
         if (!_fullscreen && !_compact) return;
+        if (LiveChannelOverlay.Visibility == Visibility.Visible ||
+            LiveLineOverlay.Visibility == Visibility.Visible) return;
         if (_core?.IsPlaying != true) return;
         TopBar.Opacity = 0;
         TopBar.IsHitTestVisible = false;
@@ -880,13 +1431,41 @@ public sealed partial class LivePage : Page, INavigationPlayback
         switch (e.Key)
         {
             case VirtualKey.Escape:
-                if (_compact) { OnLivePip(null, null); e.Handled = true; }
+                if (LiveLineOverlay.Visibility == Visibility.Visible)
+                {
+                    QueueLinePanelMutation(() => CloseLinePanel());
+                    e.Handled = true;
+                }
+                else if (LiveChannelOverlay.Visibility == Visibility.Visible)
+                {
+                    QueueChannelPanelMutation(() => CloseChannelPanel());
+                    e.Handled = true;
+                }
+                else if (_compact) { OnLivePip(null, null); e.Handled = true; }
                 else if (_fullscreen) { ToggleFullscreen(); e.Handled = true; }
                 break;
             case VirtualKey.Space:
                 OnLivePlayPause(null, null); e.Handled = true; break;
             case VirtualKey.F:
-                ToggleFullscreen(); e.Handled = true; break;
+                if (LiveLineOverlay.Visibility == Visibility.Visible)
+                {
+                    QueueLinePanelMutation(() =>
+                    {
+                        CloseLinePanel(false);
+                        ToggleFullscreen();
+                    });
+                }
+                else if (LiveChannelOverlay.Visibility == Visibility.Visible)
+                {
+                    QueueChannelPanelMutation(() =>
+                    {
+                        CloseChannelPanel(false);
+                        ToggleFullscreen();
+                    });
+                }
+                else ToggleFullscreen();
+                e.Handled = true;
+                break;
             case VirtualKey.Up:
             case VirtualKey.Down:
                 // 焦点在列表内时保留列表自身的方向键导航
@@ -939,6 +1518,21 @@ public sealed partial class LivePage : Page, INavigationPlayback
     }
 }
 
+public sealed class LiveLineSelectionItem
+{
+    public LiveLineSelectionItem(string label, int index, bool isSelected)
+    {
+        Label = label ?? "";
+        Index = index;
+        IsSelected = isSelected;
+    }
+
+    public string Label { get; }
+    public int Index { get; }
+    public bool IsSelected { get; }
+    public string CheckGlyph => IsSelected ? "\uE73E" : "";
+}
+
 /// <summary>直播页私有设置包装（不改 Core/Setting.cs）：收藏频道存 JSON 列表，键 "live_keep"。</summary>
 static class LiveSetting
 {
@@ -971,6 +1565,7 @@ public class LiveChannelItem : INotifyPropertyChanged
 {
     string _now = "";
     bool _keep;
+    bool _isCurrent;
 
     public LiveChannelItem(LiveChannel channel) => Channel = channel;
 
@@ -978,9 +1573,21 @@ public class LiveChannelItem : INotifyPropertyChanged
     public string Name => Channel.Name;
     public string Number => Channel.Number;
     public string Logo => Channel.GetLogo();
+    public string GroupName => Channel.Group?.Name ?? "";
     public string NowText { get => _now; set { _now = value ?? ""; Notify(nameof(NowText)); } }
     public bool IsKeep { get => _keep; set { _keep = value; Notify(nameof(KeepGlyph)); } }
     public string KeepGlyph => _keep ? "\uE735" : "\uE734";
+    public bool IsCurrent
+    {
+        get => _isCurrent;
+        set
+        {
+            if (_isCurrent == value) return;
+            _isCurrent = value;
+            Notify(nameof(CheckGlyph));
+        }
+    }
+    public string CheckGlyph => _isCurrent ? "\uE73E" : "";
 
     public event PropertyChangedEventHandler PropertyChanged;
     void Notify(string name) => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

@@ -37,15 +37,15 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ## 3. 生成便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.3
+.\scripts\Publish-Portable.ps1 -Version 1.0.4
 ```
 
 默认输出：
 
 ```text
 artifacts/
-|-- TVBox-x64-1.0.3/
-|-- TVBox-x64-1.0.3.zip
+|-- TVBox-x64-1.0.4/
+|-- TVBox-x64-1.0.4.zip
 `-- SHA256SUMS.txt
 ```
 
@@ -94,10 +94,10 @@ TVBox/
 安装器应只从同一版本的干净便携目录取文件，不得从 `bin/`、`obj/`、旧 `windows/publish/` 或用户运行目录取文件。
 
 ```powershell
-.\installer\build.ps1 -Version 1.0.3
+.\installer\build.ps1 -Version 1.0.4
 ```
 
-安装包输出为 `artifacts\TVBox-Setup-x64-1.0.3.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
+安装包输出为 `artifacts\TVBox-Setup-x64-1.0.4.msi`，并追加写入 `artifacts\SHA256SUMS.txt`。
 
 至少确认：
 
@@ -139,11 +139,11 @@ Release 说明中不要粘贴私人订阅或带鉴权的复现地址。若没有
 收到明确上传指令并配置好 GitHub CLI 后，才可使用类似命令发布；实际仓库、标签和文件名以当前版本为准：
 
 ```powershell
-git tag -a v1.0.3 -m 'TVBox for Windows v1.0.3'
-git push origin v1.0.3
-gh release create v1.0.3 .\artifacts\TVBox-x64-1.0.3.zip `
-  .\artifacts\TVBox-Setup-x64-1.0.3.msi `
-  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.3'
+git tag -a v1.0.4 -m 'TVBox for Windows v1.0.4'
+git push origin v1.0.4
+gh release create v1.0.4 .\artifacts\TVBox-x64-1.0.4.zip `
+  .\artifacts\TVBox-Setup-x64-1.0.4.msi `
+  .\artifacts\SHA256SUMS.txt --verify-tag --title 'TVBox for Windows v1.0.4'
 ```
 
 先创建草稿 Release 并人工核对附件、哈希和说明，再公开发布。

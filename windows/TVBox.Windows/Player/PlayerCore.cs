@@ -33,6 +33,7 @@ public class PlayerCore : IDisposable
     PlayItem _item;
     int _scale;
     int _openGeneration;
+    int _openingGeneration;
     bool _formatRecoveryTried;
     bool _videoRecoveryTried;
     bool _recovering;
@@ -141,27 +142,57 @@ public class PlayerCore : IDisposable
 
     public void Open(PlayItem item)
     {
+        if (item == null || string.IsNullOrWhiteSpace(item.Url))
+        {
+            var invalidGeneration = Interlocked.Increment(ref _openGeneration);
+            Volatile.Write(ref _openingGeneration, 0);
+            _item = null;
+            PostIfCurrent(invalidGeneration, () => Errored?.Invoke("播放地址为空"));
+            return;
+        }
         lock (_subtitleLock) _subtitlePending = null;
-        _item = item;
-        _openGeneration++;
+        var request = Snapshot(item);
+        var generation = Interlocked.Increment(ref _openGeneration);
+        _item = request;
+        Volatile.Write(ref _openingGeneration, generation);
         _formatRecoveryTried = false;
         _videoRecoveryTried = false;
         _recovering = false;
-        _ignorePlaybackStopUntil = 0;
-        if (!EngineReady || Fly == null) { App.Post(() => Errored?.Invoke(MissingFFmpegMsg)); return; }
+        _ignorePlaybackStopUntil = Environment.TickCount64 + 2500;
+        if (!EngineReady || Fly == null)
+        {
+            Volatile.Write(ref _openingGeneration, 0);
+            PostIfCurrent(generation, () => Errored?.Invoke(MissingFFmpegMsg));
+            return;
+        }
         try
         {
-            if (!ApplyDrm(item.Drm)) return;
-            ApplyHeaders(item.Headers);
-            ApplyFormat(item.Format);
+            var options = BuildFormatOptions(request, generation);
+            if (options == null)
+            {
+                Volatile.Write(ref _openingGeneration, 0);
+                return;
+            }
+            Fly.Config.Demuxer.FormatOpt = options;
+            ApplyFormat(request.Format);
             Fly.Config.Video.VideoAcceleration = Setting.Flag != 0;
-            Core.Logger.D(TAG, $"打开媒体 {DescribeUrl(item.Url)}, format={item.Format ?? "auto"}, headers=[{(item.Headers == null ? "" : string.Join(',', item.Headers.Keys))}]");
-            Fly.OpenAsync(item.Url);
+            Core.Logger.D(TAG, $"打开媒体 #{generation} {DescribeUrl(request.Url)}, format={request.Format ?? "auto"}, headers=[{string.Join(',', request.Headers.Keys)}]");
+            Fly.OpenAsync(request.Url);
         }
-        catch (Exception e) { App.Post(() => Errored?.Invoke(e.Message)); }
+        catch (Exception e)
+        {
+            Volatile.Write(ref _openingGeneration, 0);
+            PostIfCurrent(generation, () => Errored?.Invoke(e.Message));
+        }
     }
 
-    public void Stop() { try { _item = null; Fly?.Stop(); } catch { } }
+    public void Stop()
+    {
+        Interlocked.Increment(ref _openGeneration);
+        Volatile.Write(ref _openingGeneration, 0);
+        _item = null;
+        try { Fly?.Stop(); } catch { }
+    }
 
     public void PlayPause() { try { Fly?.TogglePlayPause(); } catch { } }
 
@@ -333,15 +364,25 @@ public class PlayerCore : IDisposable
         catch { return 1; }
     }
 
-    /// <summary>播放 header 传给 ffmpeg：UA/Referer 独立选项，其余拼接为 \r\n 分隔的 headers。</summary>
-    void ApplyHeaders(Dictionary<string, string> headers)
+    Dictionary<string, string> BuildFormatOptions(PlayItem item, int generation)
     {
-        var opt = Fly.Config.Demuxer.FormatOpt;
+        var opt = new Dictionary<string, string>(
+            Fly.Config.Demuxer.FormatOpt ?? new Dictionary<string, string>(),
+            StringComparer.OrdinalIgnoreCase);
         opt.Remove("headers"); opt.Remove("user_agent"); opt.Remove("referer"); opt.Remove("http_proxy");
+        opt.Remove("decryption_key");
+        if (!ApplyDrm(item.Drm, opt, generation)) return null;
+        ApplyHeaders(item.Headers, item.Url, opt);
+        return opt;
+    }
+
+    /// <summary>播放 header 传给 ffmpeg：UA/Referer 独立选项，其余拼接为 \r\n 分隔的 headers。</summary>
+    static void ApplyHeaders(Dictionary<string, string> headers, string mediaUrl, Dictionary<string, string> opt)
+    {
         headers = new Dictionary<string, string>(headers ?? new(), StringComparer.OrdinalIgnoreCase);
         if (!headers.Keys.Any(k => k.Equals("User-Agent", StringComparison.OrdinalIgnoreCase)) && !string.IsNullOrWhiteSpace(Setting.Ua))
             headers["User-Agent"] = Setting.Ua;
-        var proxy = Net.NetworkConfig.GetProxyFor(UrlUtil.Host(_item?.Url));
+        var proxy = Net.NetworkConfig.GetProxyFor(UrlUtil.Host(mediaUrl));
         if (!string.IsNullOrWhiteSpace(proxy)) opt["http_proxy"] = proxy;
         var sb = new System.Text.StringBuilder();
         foreach (var kv in headers)
@@ -356,9 +397,8 @@ public class PlayerCore : IDisposable
     }
 
     /// <summary>DRM：仅 ClearKey 尽力而为（ffmpeg decryption_key，只对 CENC mp4 有效）；其余提示不支持。</summary>
-    bool ApplyDrm(Models.Drm drm)
+    bool ApplyDrm(Models.Drm drm, Dictionary<string, string> options, int generation)
     {
-        Fly.Config.Demuxer.FormatOpt.Remove("decryption_key");
         if (drm == null || string.IsNullOrEmpty(drm.Type)) return true;
         if (drm.Type.Contains("clearkey", StringComparison.OrdinalIgnoreCase))
         {
@@ -366,12 +406,12 @@ public class PlayerCore : IDisposable
             {
                 var key = drm.Key ?? "";
                 if (!JsonUtil.IsObj(key) && key.Contains(':')) key = key.Split(':')[^1].Trim();
-                if (key.Length > 0) Fly.Config.Demuxer.FormatOpt["decryption_key"] = key;
+                if (key.Length > 0) options["decryption_key"] = key;
             }
             catch { }
             return true;
         }
-        App.Post(() => Errored?.Invoke("Windows 版暂不支持 " + drm.Type + " DRM"));
+        PostIfCurrent(generation, () => Errored?.Invoke("Windows 版暂不支持 " + drm.Type + " DRM"));
         return false;
     }
 
@@ -400,60 +440,96 @@ public class PlayerCore : IDisposable
             CompleteSubtitle(0, e.Success, e.Error);
             return;
         }
-        var wasRecovering = _recovering;
+        var generation = Volatile.Read(ref _openGeneration);
+        var item = _item;
+        if (item == null || Volatile.Read(ref _openingGeneration) != generation) return;
+        if (!string.IsNullOrWhiteSpace(e.Url) && !string.Equals(e.Url, item.Url, StringComparison.Ordinal))
+        {
+            Core.Logger.D(TAG, $"忽略旧媒体打开结果 #{generation}: {DescribeUrl(e.Url)}");
+            return;
+        }
         _recovering = false;
         if (e.Success)
         {
+            Interlocked.CompareExchange(ref _openingGeneration, 0, generation);
             // Flyleaf can deliver the stopped event from the replaced decoder after
-            // the recovery decoder has already opened. Do not surface that stale error.
-            if (wasRecovering) _ignorePlaybackStopUntil = Environment.TickCount64 + 2000;
-            var start = _item?.StartPositionMs ?? 0;
+            // the new decoder has opened. Do not surface that stale error.
+            _ignorePlaybackStopUntil = Environment.TickCount64 + 2500;
+            var start = item.StartPositionMs;
             if (start > 0) SeekMs(start);
-            Core.Logger.D(TAG, $"媒体已打开 video={Fly.Video?.IsOpened == true}, audio={Fly.Audio?.IsOpened == true}, hw={Fly.Config.Video.VideoAcceleration}");
-            StartVideoWatchdog(_openGeneration);
-            App.Post(() => Opened?.Invoke());
+            Core.Logger.D(TAG, $"媒体已打开 #{generation} video={Fly.Video?.IsOpened == true}, audio={Fly.Audio?.IsOpened == true}, hw={Fly.Config.Video.VideoAcceleration}");
+            StartVideoWatchdog(generation, item);
+            PostIfCurrent(generation, () => Opened?.Invoke());
         }
-        else if (!string.IsNullOrEmpty(e.Error) && !e.Error.Contains("cancel", StringComparison.OrdinalIgnoreCase))
+        else
         {
-            if (TryRecoverFormat(e.Error)) return;
-            App.Post(() => Errored?.Invoke(e.Error));
+            var error = string.IsNullOrWhiteSpace(e.Error) ? "媒体打开失败" : e.Error;
+            if (TryRecoverFormat(error, generation, item)) return;
+            Interlocked.CompareExchange(ref _openingGeneration, 0, generation);
+            PostIfCurrent(generation, () => Errored?.Invoke(error));
         }
     }
 
     void OnPlaybackStopped(object sender, PlaybackStoppedArgs e)
     {
         if (_disposed) return;
+        var generation = Volatile.Read(ref _openGeneration);
+        if (_item == null) return;
         try
         {
-            if (Fly.Status == Status.Ended) App.Post(() => Ended?.Invoke());
-            else if (!_recovering && !string.IsNullOrEmpty(e.Error))
+            if (Volatile.Read(ref _openingGeneration) == generation || _recovering)
+            {
+                Core.Logger.D(TAG, "已忽略换源期间旧解码器的停止事件: " + e.Error);
+                return;
+            }
+            if (Fly.Status == Status.Ended)
+            {
+                PostIfCurrent(generation, () => Ended?.Invoke());
+                return;
+            }
+            if (!string.IsNullOrEmpty(e.Error))
             {
                 if (Environment.TickCount64 <= _ignorePlaybackStopUntil)
-                    Core.Logger.D(TAG, "已忽略自动恢复后旧解码器的停止事件: " + e.Error);
-                else App.Post(() => Errored?.Invoke(e.Error));
+                {
+                    Core.Logger.D(TAG, "已忽略新媒体打开后的旧解码器停止事件: " + e.Error);
+                    return;
+                }
+                var error = e.Error;
+                PostIfCurrent(generation, () => Errored?.Invoke(error));
             }
         }
         catch { }
     }
 
-    bool TryRecoverFormat(string error)
+    bool TryRecoverFormat(string error, int generation, PlayItem item)
     {
-        if (_formatRecoveryTried || _item == null) return false;
+        if (_formatRecoveryTried || item == null || generation != Volatile.Read(ref _openGeneration)) return false;
         if (!error.Contains("No audio / video stream", StringComparison.OrdinalIgnoreCase) &&
             !error.Contains("Invalid data", StringComparison.OrdinalIgnoreCase) &&
             !error.Contains("format", StringComparison.OrdinalIgnoreCase)) return false;
         var current = Fly.Config.Demuxer.ForceFormat;
-        var next = string.IsNullOrEmpty(current) && _item.Url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ? "hls" : null;
+        var next = string.IsNullOrEmpty(current) && item.Url.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ? "hls" : null;
         if (string.Equals(current, next, StringComparison.OrdinalIgnoreCase)) return false;
         _formatRecoveryTried = true;
         _recovering = true;
+        Volatile.Write(ref _openingGeneration, generation);
+        _ignorePlaybackStopUntil = Environment.TickCount64 + 2500;
         Fly.Config.Demuxer.ForceFormat = next;
         Core.Logger.D(TAG, $"容器识别失败，改用{(next == null ? "自动探测" : next)}重试");
-        Fly.OpenAsync(_item.Url);
-        return true;
+        try
+        {
+            Fly.OpenAsync(item.Url);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _recovering = false;
+            Core.Logger.E(TAG, "容器恢复重开失败: " + ex.Message);
+            return false;
+        }
     }
 
-    void StartVideoWatchdog(int generation)
+    void StartVideoWatchdog(int generation, PlayItem item)
     {
         if (_videoRecoveryTried || Fly?.Video?.IsOpened != true) return;
         _ = Task.Run(async () =>
@@ -461,18 +537,46 @@ public class PlayerCore : IDisposable
             await Task.Delay(5000);
             App.Post(() =>
             {
-                if (_disposed || generation != _openGeneration || _videoRecoveryTried || Fly?.Video?.IsOpened != true) return;
+                if (_disposed || generation != Volatile.Read(ref _openGeneration) || !ReferenceEquals(item, _item) ||
+                    _videoRecoveryTried || Fly?.Video?.IsOpened != true) return;
                 if (!Fly.IsPlaying || Fly.Video.FramesDisplayed > 0) return;
                 _videoRecoveryTried = true;
                 _recovering = true;
                 var position = PositionMs;
-                if (_item != null) _item.StartPositionMs = Math.Max(_item.StartPositionMs, position);
+                item.StartPositionMs = Math.Max(item.StartPositionMs, position);
+                Volatile.Write(ref _openingGeneration, generation);
+                _ignorePlaybackStopUntil = Environment.TickCount64 + 2500;
                 Fly.Config.Video.VideoAcceleration = false;
                 Core.Logger.D(TAG, "检测到视频流已打开但无画面，切换软件解码重试");
-                Fly.OpenAsync(_item.Url);
+                try { Fly.OpenAsync(item.Url); }
+                catch (Exception ex)
+                {
+                    _recovering = false;
+                    Interlocked.CompareExchange(ref _openingGeneration, 0, generation);
+                    PostIfCurrent(generation, () => Errored?.Invoke(ex.Message));
+                }
             });
         });
     }
+
+    void PostIfCurrent(int generation, Action action)
+    {
+        App.Post(() =>
+        {
+            if (!_disposed && generation == Volatile.Read(ref _openGeneration)) action?.Invoke();
+        });
+    }
+
+    static PlayItem Snapshot(PlayItem item) => new()
+    {
+        Url = item.Url ?? "",
+        Headers = new Dictionary<string, string>(item.Headers ?? new(), StringComparer.OrdinalIgnoreCase),
+        Format = item.Format,
+        Drm = item.Drm,
+        StartPositionMs = item.StartPositionMs,
+        Subs = item.Subs?.ToList() ?? new List<Models.Sub>(),
+        Danmaku = item.Danmaku?.ToList() ?? new List<Models.Danmaku>(),
+    };
 
     static string DescribeUrl(string value)
     {
@@ -490,6 +594,9 @@ public class PlayerCore : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
+        Interlocked.Increment(ref _openGeneration);
+        Volatile.Write(ref _openingGeneration, 0);
+        _item = null;
         lock (_subtitleLock)
         {
             _subtitleActive = null;
