@@ -3,7 +3,9 @@ using TVBoxForWindows.Engine;
 using TVBoxForWindows.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Navigation;
+using Windows.Foundation;
 
 namespace TVBoxForWindows.UI.Pages;
 
@@ -12,6 +14,7 @@ public sealed partial class KeepPage : Page
 {
     long _revision = -1;
     int _cid = -1;
+    KeepItem _contextItem;
 
     public KeepPage() => InitializeComponent();
 
@@ -19,6 +22,12 @@ public sealed partial class KeepPage : Page
     {
         base.OnNavigatedTo(e);
         RefreshIfChanged();
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        HideContextMenu();
+        base.OnNavigatedFrom(e);
     }
 
     public void RefreshIfChanged()
@@ -56,10 +65,44 @@ public sealed partial class KeepPage : Page
             Frame.Navigate(typeof(DetailPage), new DetailArgs { SiteKey = item.SiteKey, VodId = item.VodId, Name = item.Title });
     }
 
-    /// <summary>右键菜单：取消收藏（sender.DataContext 即视图项）。</summary>
+    void OnCardPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement target || target.DataContext is not KeepItem item) return;
+        if (!e.GetCurrentPoint(target).Properties.IsRightButtonPressed) return;
+        _contextItem = item;
+        ContextLayer.Visibility = Visibility.Visible;
+        ContextLayer.UpdateLayout();
+        PositionContextMenu(e.GetCurrentPoint(ContextLayer).Position);
+        e.Handled = true;
+    }
+
+    void PositionContextMenu(Point point)
+    {
+        ContextMenuPanel.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var width = Math.Max(152, ContextMenuPanel.DesiredSize.Width);
+        var height = Math.Max(48, ContextMenuPanel.DesiredSize.Height);
+        Canvas.SetLeft(ContextMenuPanel, Math.Clamp(point.X, 8, Math.Max(8, ContextLayer.ActualWidth - width - 8)));
+        Canvas.SetTop(ContextMenuPanel, Math.Clamp(point.Y, 8, Math.Max(8, ContextLayer.ActualHeight - height - 8)));
+    }
+
+    void OnContextLayerPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (!ReferenceEquals(e.OriginalSource, ContextLayer)) return;
+        HideContextMenu();
+        e.Handled = true;
+    }
+
+    void HideContextMenu()
+    {
+        ContextLayer.Visibility = Visibility.Collapsed;
+        _contextItem = null;
+    }
+
     void OnRemove(object sender, RoutedEventArgs e)
     {
-        if ((sender as FrameworkElement)?.DataContext is not KeepItem item) return;
+        var item = _contextItem;
+        HideContextMenu();
+        if (item == null) return;
         Stores.DeleteKeep(VodConfigService.Cid, item.Key);
         RefreshIfChanged();
     }

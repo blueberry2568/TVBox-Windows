@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 1.0.6 - 2026-08-01
+
+### Fixed
+
+- Replaced the fixed playback-window transition delay with native window and WinUI layout stability detection, reducing jitter and flicker when entering or leaving full-screen and picture-in-picture modes.
+- Synchronized the final Flyleaf swap-chain size after every presentation change and ignored repeated mode commands while a transition is still settling.
+
+## 1.0.5 - 2026-07-31
+
+### Fixed
+
+- Removed the experimental frozen-window transition that could duplicate the video, expose the desktop, or time out while entering picture-in-picture from a maximized window; playback presentation is back on the stable native presenter and placement path.
+- Replaced recycled-card `ContextFlyout` instances on favorites and history pages with page-owned context menus, avoiding a repeatable access violation in `Microsoft.UI.Input.dll` when right-clicking a poster.
+
 ## 1.0.4 - 2026-07-31
 
 ### Added

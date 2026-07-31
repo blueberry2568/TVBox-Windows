@@ -25,11 +25,26 @@ public sealed partial class MainWindow : Window
     const double TitleBarHeight = 52;
     const double CompactPaneWidth = 48;
     const int ShellLayoutSettleDelayMs = 160;
-    const int PlaybackWindowSettleDelayMs = 120;
-    const int PlaybackContentFadeDurationMs = 160;
+    const int PlaybackWindowSampleIntervalMs = 16;
+    const int PlaybackWindowQuietPeriodMs = 48;
+    const int PlaybackWindowMinimumSettleMs = 64;
+    const int PlaybackWindowMaximumSettleMs = 600;
+    const int PlaybackContentFadeDurationMs = 120;
+    const float PlaybackTransitionOpacity = 0.985f;
     readonly WindowPresentationManager _presentation;
     Microsoft.UI.Dispatching.DispatcherQueueTimer _shellLayoutRefreshTimer;
     Microsoft.UI.Dispatching.DispatcherQueueTimer _playbackWindowTransitionTimer;
+    long _playbackWindowTransitionStartedAt;
+    long _playbackWindowLastChangedAt;
+    int _playbackWindowStableSamples;
+    int _playbackWindowLastX;
+    int _playbackWindowLastY;
+    int _playbackWindowLastWidth;
+    int _playbackWindowLastHeight;
+    double _playbackRootLastWidth;
+    double _playbackRootLastHeight;
+    bool _playbackWindowTransitionActive;
+    bool _playbackWindowOperationCompleted;
     bool _immersive;
     bool _immersiveBorderless;
     bool _navigationPaneOpen;
@@ -157,6 +172,8 @@ public sealed partial class MainWindow : Window
     /// </summary>
     public Task InitialVodRestoreTask => _initialVodRestoreTask;
 
+    public bool IsPlaybackWindowTransitionActive => _playbackWindowTransitionActive;
+
     public bool EnterPlaybackFullScreen()
     {
         BeginPlaybackWindowTransition();
@@ -211,22 +228,30 @@ public sealed partial class MainWindow : Window
     void BeginPlaybackWindowTransition()
     {
         StopPlaybackWindowTransition(false);
+        _playbackWindowTransitionActive = true;
+        _playbackWindowOperationCompleted = false;
+        _playbackWindowStableSamples = 0;
+        _playbackWindowTransitionStartedAt = Environment.TickCount64;
+        _playbackWindowLastChangedAt = _playbackWindowTransitionStartedAt;
+        CapturePlaybackWindowSample();
         WindowFrameStyle.SetTransitionsDisabled(this, true);
         try
         {
             var visual = ElementCompositionPreview.GetElementVisual(RootGrid);
             visual.StopAnimation("Opacity");
-            visual.Opacity = 0.9f;
+            visual.Opacity = PlaybackTransitionOpacity;
         }
         catch { }
     }
 
     void CompletePlaybackWindowTransition()
     {
+        if (!_playbackWindowTransitionActive) return;
+        _playbackWindowOperationCompleted = true;
         _playbackWindowTransitionTimer ??= DispatcherQueue.CreateTimer();
         _playbackWindowTransitionTimer.Stop();
-        _playbackWindowTransitionTimer.Interval = TimeSpan.FromMilliseconds(PlaybackWindowSettleDelayMs);
-        _playbackWindowTransitionTimer.IsRepeating = false;
+        _playbackWindowTransitionTimer.Interval = TimeSpan.FromMilliseconds(PlaybackWindowSampleIntervalMs);
+        _playbackWindowTransitionTimer.IsRepeating = true;
         _playbackWindowTransitionTimer.Tick -= OnPlaybackWindowTransitionSettled;
         _playbackWindowTransitionTimer.Tick += OnPlaybackWindowTransitionSettled;
         _playbackWindowTransitionTimer.Start();
@@ -236,10 +261,73 @@ public sealed partial class MainWindow : Window
         Microsoft.UI.Dispatching.DispatcherQueueTimer sender,
         object args)
     {
-        if (!ReferenceEquals(sender, _playbackWindowTransitionTimer)) return;
-        StopPlaybackWindowTransition(false);
+        if (!ReferenceEquals(sender, _playbackWindowTransitionTimer) ||
+            !_playbackWindowTransitionActive ||
+            !_playbackWindowOperationCompleted) return;
+
+        var now = Environment.TickCount64;
+        if (PlaybackWindowSampleChanged())
+        {
+            _playbackWindowLastChangedAt = now;
+            _playbackWindowStableSamples = 0;
+        }
+        else _playbackWindowStableSamples++;
+
+        var elapsed = now - _playbackWindowTransitionStartedAt;
+        var quiet = now - _playbackWindowLastChangedAt;
+        var settled = elapsed >= PlaybackWindowMinimumSettleMs &&
+            quiet >= PlaybackWindowQuietPeriodMs &&
+            _playbackWindowStableSamples >= 2;
+        if (!settled && elapsed < PlaybackWindowMaximumSettleMs) return;
+
+        StopPlaybackWindowTransitionTimer();
+        SynchronizeActivePlaybackWindow();
+        _playbackWindowTransitionActive = false;
+        _playbackWindowOperationCompleted = false;
         WindowFrameStyle.SetTransitionsDisabled(this, false);
         FadeInPlaybackWindowContent();
+    }
+
+    void CapturePlaybackWindowSample()
+    {
+        _playbackWindowLastX = AppWindow.Position.X;
+        _playbackWindowLastY = AppWindow.Position.Y;
+        _playbackWindowLastWidth = AppWindow.Size.Width;
+        _playbackWindowLastHeight = AppWindow.Size.Height;
+        _playbackRootLastWidth = RootGrid.ActualWidth;
+        _playbackRootLastHeight = RootGrid.ActualHeight;
+    }
+
+    bool PlaybackWindowSampleChanged()
+    {
+        var position = AppWindow.Position;
+        var size = AppWindow.Size;
+        var rootWidth = RootGrid.ActualWidth;
+        var rootHeight = RootGrid.ActualHeight;
+        var changed = position.X != _playbackWindowLastX ||
+            position.Y != _playbackWindowLastY ||
+            size.Width != _playbackWindowLastWidth ||
+            size.Height != _playbackWindowLastHeight ||
+            Math.Abs(rootWidth - _playbackRootLastWidth) >= 0.5 ||
+            Math.Abs(rootHeight - _playbackRootLastHeight) >= 0.5;
+        if (changed) CapturePlaybackWindowSample();
+        return changed;
+    }
+
+    void SynchronizeActivePlaybackWindow()
+    {
+        try
+        {
+            RootGrid.InvalidateMeasure();
+            RootGrid.InvalidateArrange();
+            RootGrid.UpdateLayout();
+            if (FrameFor(_activeSection)?.Content is INavigationPlayback playback)
+                playback.SynchronizePlaybackWindow();
+        }
+        catch (Exception e)
+        {
+            Logger.E("Presentation", "同步播放窗口布局失败：" + e.Message);
+        }
     }
 
     void FadeInPlaybackWindowContent()
@@ -258,7 +346,7 @@ public sealed partial class MainWindow : Window
             animation.Duration = TimeSpan.FromMilliseconds(PlaybackContentFadeDurationMs);
             animation.InsertKeyFrame(
                 0,
-                Math.Clamp(visual.Opacity, 0.9f, 1f),
+                Math.Clamp(visual.Opacity, PlaybackTransitionOpacity, 1f),
                 compositor.CreateCubicBezierEasingFunction(
                     new Vector2(0.2f, 0),
                     new Vector2(0, 1)));
@@ -274,13 +362,9 @@ public sealed partial class MainWindow : Window
 
     void StopPlaybackWindowTransition(bool resetVisual)
     {
-        var timer = _playbackWindowTransitionTimer;
-        _playbackWindowTransitionTimer = null;
-        if (timer != null)
-        {
-            timer.Stop();
-            timer.Tick -= OnPlaybackWindowTransitionSettled;
-        }
+        StopPlaybackWindowTransitionTimer();
+        _playbackWindowTransitionActive = false;
+        _playbackWindowOperationCompleted = false;
         WindowFrameStyle.SetTransitionsDisabled(this, false);
         if (!resetVisual) return;
         try
@@ -290,6 +374,15 @@ public sealed partial class MainWindow : Window
             visual.Opacity = 1;
         }
         catch { }
+    }
+
+    void StopPlaybackWindowTransitionTimer()
+    {
+        var timer = _playbackWindowTransitionTimer;
+        _playbackWindowTransitionTimer = null;
+        if (timer == null) return;
+        timer.Stop();
+        timer.Tick -= OnPlaybackWindowTransitionSettled;
     }
 
     public void RefreshImmersiveFrame(bool borderless = false)
@@ -302,6 +395,13 @@ public sealed partial class MainWindow : Window
     void OnAppWindowChanged(AppWindow sender, AppWindowChangedEventArgs args)
     {
         if (_closed) return;
+
+        if (_playbackWindowTransitionActive &&
+            (args.DidPresenterChange || args.DidSizeChange || args.DidPositionChange))
+        {
+            _playbackWindowLastChangedAt = Environment.TickCount64;
+            _playbackWindowStableSamples = 0;
+        }
 
         if (!_immersive)
         {

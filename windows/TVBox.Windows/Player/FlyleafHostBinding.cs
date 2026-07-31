@@ -22,6 +22,7 @@ public sealed class FlyleafHostBinding : IDisposable
     CompositionRoundedRectangleGeometry _surfaceClipGeometry;
     CompositionGeometricClip _surfaceClip;
     bool _queued;
+    bool _synchronizationSuspended;
     bool _disposed;
 
     public FlyleafHostBinding(FlyleafHost host)
@@ -42,12 +43,40 @@ public sealed class FlyleafHostBinding : IDisposable
 
     public void RequestSynchronize()
     {
-        if (_disposed || _queued) return;
+        if (_disposed) return;
+        if (_synchronizationSuspended)
+            return;
+        if (_queued) return;
         _queued = true;
         var generation = _generation;
         var queue = _host.DispatcherQueue ?? App.Dispatcher;
         if (queue == null || !queue.TryEnqueue(DispatcherQueuePriority.Low, () => Synchronize(generation)))
             _queued = false;
+    }
+
+    public void BeginPresentationTransition()
+    {
+        if (_disposed) return;
+        _synchronizationSuspended = true;
+    }
+
+    public void CancelPresentationTransition()
+    {
+        if (_disposed) return;
+        _synchronizationSuspended = false;
+    }
+
+    /// <summary>
+    /// Flushes the final swap-chain size after an AppWindow presenter transition.
+    /// Normal SizeChanged traffic remains coalesced at low priority.
+    /// </summary>
+    public void SynchronizeAfterLayout()
+    {
+        if (_disposed) return;
+        _synchronizationSuspended = false;
+        try { _host.UpdateLayout(); }
+        catch { }
+        Synchronize(_generation, false);
     }
 
     /// <summary>
@@ -69,9 +98,11 @@ public sealed class FlyleafHostBinding : IDisposable
         if (e.NewSize.Width >= 2 && e.NewSize.Height >= 2) RequestSynchronize();
     }
 
-    void Synchronize(int generation)
+    void Synchronize(int generation, bool queued = true)
     {
-        _queued = false;
+        if (queued) _queued = false;
+        if (_synchronizationSuspended)
+            return;
         if (_disposed || generation != _generation || _core?.Fly == null || !_host.IsLoaded) return;
         var width = _host.ActualWidth;
         var height = _host.ActualHeight;
@@ -166,6 +197,7 @@ public sealed class FlyleafHostBinding : IDisposable
         if (_disposed) return;
         _generation++;
         _queued = false;
+        _synchronizationSuspended = false;
         _renderWidth = _renderHeight = 0;
         _core = null;
         if (_surfaceVisual != null) _surfaceVisual.Clip = null;

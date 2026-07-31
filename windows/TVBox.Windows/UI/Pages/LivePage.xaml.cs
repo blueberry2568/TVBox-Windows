@@ -261,6 +261,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
 
     public void PauseForNavigation()
     {
+        _hostBinding?.CancelPresentationTransition();
         _linePanelMutationVersion++;
         _channelPanelMutationVersion++;
         CloseChannelPanel(false);
@@ -285,6 +286,26 @@ public sealed partial class LivePage : Page, INavigationPlayback
             _ = UpdateProgramAsync(_currentItem);
             _programTimer.Stop();
             _programTimer.Start();
+        }
+    }
+
+    public void SynchronizePlaybackWindow()
+    {
+        if (!_isNavigatedActive || XamlRoot == null) return;
+        try
+        {
+            RootGrid.InvalidateMeasure();
+            RootGrid.InvalidateArrange();
+            PlayerArea.InvalidateMeasure();
+            PlayerArea.InvalidateArrange();
+            RootGrid.UpdateLayout();
+            UpdateBottomBarLayout();
+            UpdatePlayerAreaClip();
+            _hostBinding?.SynchronizeAfterLayout();
+        }
+        catch (Exception e)
+        {
+            Logger.E("LivePage", "同步播放窗口布局失败：" + e.Message);
         }
     }
 
@@ -1181,6 +1202,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
 
     void ToggleFullscreen()
     {
+        if (!_isNavigatedActive || App.Main.IsPlaybackWindowTransitionActive) return;
+        _hostBinding?.BeginPresentationTransition();
         _channelPanelMutationVersion++;
         _linePanelMutationVersion++;
         CloseChannelPanel(false);
@@ -1213,12 +1236,13 @@ public sealed partial class LivePage : Page, INavigationPlayback
         }
         if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
         ShowPlayerChrome();
-        _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
     }
 
     void OnLivePip(object sender, RoutedEventArgs e)
     {
+        if (!_isNavigatedActive || App.Main.IsPlaybackWindowTransitionActive) return;
+        _hostBinding?.BeginPresentationTransition();
         _channelPanelMutationVersion++;
         _linePanelMutationVersion++;
         CloseChannelPanel(false);
@@ -1251,7 +1275,6 @@ public sealed partial class LivePage : Page, INavigationPlayback
         }
         if (entering && _compact) App.Main.RefreshImmersiveFrame(_fullscreen);
         ShowPlayerChrome();
-        _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
     }
 

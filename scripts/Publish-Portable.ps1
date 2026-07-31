@@ -4,7 +4,7 @@ param(
     [string]$Architecture = "x64",
 
     [ValidatePattern("^\d+\.\d+\.\d+$")]
-    [string]$Version = "1.0.4",
+    [string]$Version = "1.0.6",
 
     [string]$OutputRoot = "",
 

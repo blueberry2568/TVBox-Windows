@@ -1231,6 +1231,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     public void PauseForNavigation()
     {
         if (_closed) return;
+        _hostBinding?.CancelPresentationTransition();
         _selectionMutationVersion++;
         CloseSelectionPanel(false);
         _pauseWhenOpened = true;
@@ -1251,6 +1252,26 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         ShowControls();
     }
 
+    public void SynchronizePlaybackWindow()
+    {
+        if (_closed || XamlRoot == null) return;
+        try
+        {
+            PageRoot.InvalidateMeasure();
+            PageRoot.InvalidateArrange();
+            PlayerArea.InvalidateMeasure();
+            PlayerArea.InvalidateArrange();
+            PageRoot.UpdateLayout();
+            UpdateCompactLayout(CompactBottomBar.ActualWidth);
+            UpdatePlayerAreaClip();
+            _hostBinding?.SynchronizeAfterLayout();
+        }
+        catch (Exception e)
+        {
+            Logger.E("PlayerPage", "同步播放窗口布局失败：" + e.Message);
+        }
+    }
+
     void UpdatePlayPauseIcon()
     {
         var glyph = _core != null && _core.IsPlaying ? "" : "";
@@ -1262,6 +1283,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     void ToggleFullscreen()
     {
+        if (_closed || App.Main.IsPlaybackWindowTransitionActive) return;
+        _hostBinding?.BeginPresentationTransition();
         var entering = !_fullscreen;
         if (entering)
         {
@@ -1284,19 +1307,18 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         }
         else
         {
-            // Keep the immersive visual tree visible until the native window has
-            // returned to its original presenter and placement.
             if (!App.Main.RestorePlaybackWindow()) return;
             _fullscreen = false;
             ApplyPresentationMode();
         }
         if (entering) App.Main.RefreshImmersiveFrame(_fullscreen);
-        _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
     }
 
     void OnPip(object sender, RoutedEventArgs e)
     {
+        if (_closed || App.Main.IsPlaybackWindowTransitionActive) return;
+        _hostBinding?.BeginPresentationTransition();
         var entering = !_compact;
         if (entering)
         {
@@ -1319,15 +1341,11 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         }
         else
         {
-            // Keep the compact visual tree active until the native window has its
-            // original placement. Revealing the normal shell first exposes the
-            // stored non-maximized bounds for one frame before Windows maximizes it.
             if (!App.Main.RestorePlaybackWindow()) return;
             _compact = false;
             ApplyPresentationMode();
         }
         if (entering && _compact) App.Main.RefreshImmersiveFrame(_fullscreen);
-        _hostBinding?.RequestSynchronize();
         Focus(FocusState.Programmatic);
     }
 

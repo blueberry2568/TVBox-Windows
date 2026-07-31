@@ -7,16 +7,9 @@
 
     <Page.Resources>
         <DataTemplate x:Key="KeepTemplate">
-            <StackPanel Margin="6" Width="150">
-                <StackPanel.ContextFlyout>
-                    <MenuFlyout>
-                        <MenuFlyoutItem Text="取消收藏" Click="OnRemove">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE8D9;"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </StackPanel.ContextFlyout>
+            <StackPanel Margin="6"
+                        Width="150"
+                        PointerPressed="OnCardPointerPressed">
                 <controls:PosterCard Pic="{Binding Pic}"
                                      Title="{Binding Title}"
                                      Remark="{Binding Remark}"/>
@@ -24,7 +17,7 @@
         </DataTemplate>
     </Page.Resources>
 
-    <Grid Padding="{StaticResource PagePadding}">
+    <Grid x:Name="PageRoot" Padding="{StaticResource PagePadding}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -51,5 +44,31 @@
                        Margin="0,48,0,0"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </Grid>
+
+        <Canvas x:Name="ContextLayer"
+                Grid.RowSpan="2"
+                Visibility="Collapsed"
+                Background="Transparent"
+                Canvas.ZIndex="1000"
+                PointerPressed="OnContextLayerPointerPressed">
+            <Border x:Name="ContextMenuPanel"
+                    MinWidth="152"
+                    Padding="4"
+                    CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <Button HorizontalAlignment="Stretch"
+                        HorizontalContentAlignment="Left"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="OnRemove">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon Glyph="&#xE8D9;" FontSize="16"/>
+                        <TextBlock Text="取消收藏"/>
+                    </StackPanel>
+                </Button>
+            </Border>
+        </Canvas>
     </Grid>
 </Page>

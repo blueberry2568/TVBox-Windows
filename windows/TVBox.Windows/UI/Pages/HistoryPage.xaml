@@ -7,21 +7,9 @@
 
     <Page.Resources>
         <DataTemplate x:Key="HistoryTemplate">
-            <StackPanel Margin="6" Width="150">
-                <StackPanel.ContextFlyout>
-                    <MenuFlyout>
-                        <MenuFlyoutItem Text="删除该条" Click="OnDeleteOne">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE74D;"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem Text="清空全部" Click="OnClearAll">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE75C;"/>
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </StackPanel.ContextFlyout>
+            <StackPanel Margin="6"
+                        Width="150"
+                        PointerPressed="OnCardPointerPressed">
                 <controls:PosterCard Pic="{Binding Pic}"
                                      Title="{Binding Title}"
                                      Remark="{Binding Remark}"/>
@@ -38,7 +26,7 @@
         </DataTemplate>
     </Page.Resources>
 
-    <Grid Padding="{StaticResource PagePadding}">
+    <Grid x:Name="PageRoot" Padding="{StaticResource PagePadding}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -71,5 +59,43 @@
                        Margin="0,48,0,0"
                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
         </Grid>
+
+        <Canvas x:Name="ContextLayer"
+                Grid.RowSpan="2"
+                Visibility="Collapsed"
+                Background="Transparent"
+                Canvas.ZIndex="1000"
+                PointerPressed="OnContextLayerPointerPressed">
+            <Border x:Name="ContextMenuPanel"
+                    MinWidth="152"
+                    Padding="4"
+                    CornerRadius="8"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1">
+                <StackPanel>
+                    <Button HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="OnDeleteOne">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE74D;" FontSize="16"/>
+                            <TextBlock Text="删除该条"/>
+                        </StackPanel>
+                    </Button>
+                    <Button HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Click="OnClearAll">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE75C;" FontSize="16"/>
+                            <TextBlock Text="清空全部"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </Canvas>
     </Grid>
 </Page>
