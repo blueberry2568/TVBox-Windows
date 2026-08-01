@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.0.9 - 2026-08-01
+
+### Fixed
+
+- Close the saved video-source and live-source history flyouts as soon as a configuration load starts, preventing the popup from remaining over the destination page.
+
 ## 1.0.8 - 2026-08-01
 
 ### Fixed

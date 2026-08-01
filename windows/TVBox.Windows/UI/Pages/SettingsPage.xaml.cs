@@ -40,6 +40,7 @@ public sealed partial class SettingsPage : Page
         Unloaded += (s, e) =>
         {
             _statusTimer.Stop();
+            CloseConfigHistoryFlyouts();
             VodConfigService.Instance.Loaded -= OnVodLoaded;
             LiveConfigService.Instance.Loaded -= OnLiveLoaded;
         };
@@ -150,6 +151,7 @@ public sealed partial class SettingsPage : Page
         if (_vodConfigLoading) return;
         var url = VodUrlBox.Text?.Trim();
         if (string.IsNullOrEmpty(url)) return;
+        CloseConfigHistoryFlyouts();
         _vodConfigLoading = true;
         VodLoadButton.IsEnabled = false;
         try
@@ -200,6 +202,7 @@ public sealed partial class SettingsPage : Page
         if (_liveConfigLoading) return;
         var url = LiveUrlBox.Text?.Trim();
         if (string.IsNullOrEmpty(url)) return;
+        CloseConfigHistoryFlyouts();
         _liveConfigLoading = true;
         LiveLoadButton.IsEnabled = false;
         try
@@ -241,6 +244,12 @@ public sealed partial class SettingsPage : Page
         if ((sender as FrameworkElement)?.DataContext is not ConfigRecord rec) return;
         Stores.DeleteConfig(rec.Url, rec.Type);
         RefreshConfigLists();
+    }
+
+    void CloseConfigHistoryFlyouts()
+    {
+        VodHistoryFlyout?.Hide();
+        LiveHistoryFlyout?.Hide();
     }
 
     void OnSiteChanged(object sender, SelectionChangedEventArgs e)

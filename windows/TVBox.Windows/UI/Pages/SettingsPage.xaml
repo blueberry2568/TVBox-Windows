@@ -115,7 +115,7 @@
                              LostFocus="OnVodUrlLostFocus" KeyDown="OnVodUrlKeyDown"/>
                     <DropDownButton Grid.Row="0" Grid.Column="2" Content="历史" VerticalAlignment="Center">
                         <DropDownButton.Flyout>
-                            <Flyout Placement="Bottom">
+                            <Flyout x:Name="VodHistoryFlyout" Placement="Bottom">
                                 <ListView x:Name="VodHistoryList" Width="380" MaxHeight="320"
                                           IsItemClickEnabled="True" ItemClick="OnVodHistoryClick" SelectionMode="None">
                                     <ListView.ItemTemplate>
@@ -150,7 +150,7 @@
                              LostFocus="OnLiveUrlLostFocus" KeyDown="OnLiveUrlKeyDown"/>
                     <DropDownButton Grid.Row="1" Grid.Column="2" Content="历史" VerticalAlignment="Center">
                         <DropDownButton.Flyout>
-                            <Flyout Placement="Bottom">
+                            <Flyout x:Name="LiveHistoryFlyout" Placement="Bottom">
                                 <ListView x:Name="LiveHistoryList" Width="380" MaxHeight="320"
                                           IsItemClickEnabled="True" ItemClick="OnLiveHistoryClick" SelectionMode="None">
                                     <ListView.ItemTemplate>
