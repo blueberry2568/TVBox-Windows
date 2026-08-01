@@ -144,7 +144,7 @@ dotnet build .\windows\TVBox.Windows\TVBox.Windows.csproj `
 ### 生成干净便携包
 
 ```powershell
-.\scripts\Publish-Portable.ps1 -Version 1.0.9
+.\scripts\Publish-Portable.ps1 -Version 1.0.10
 ```
 
 输出位于 `artifacts/`，包括发布目录、ZIP 和 `SHA256SUMS.txt`。发布目录采用上述结构：根目录提供唯一的 `TVBox.exe` apphost，`libs` 保存应用与第三方依赖，`runtime` 保存标准私有 .NET 运行时，Node、FFmpeg、资源和语言文件分别归类。脚本会校验 apphost 到 `libs` 和私有运行时的部署契约、目录结构、唯一主程序和版本元数据，并在发现用户数据、凭据 URL、私钥、GitHub Token 或本机用户路径时停止打包。

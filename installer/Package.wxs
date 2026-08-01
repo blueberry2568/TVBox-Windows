@@ -13,15 +13,72 @@
 
     <SummaryInformation Description="TVBox Windows x64 installer" />
     <MajorUpgrade DowngradeErrorMessage="A newer version of TVBox is already installed." />
-    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="medium" />
 
     <Icon Id="TVBoxIcon.ico" SourceFile="!(bindpath.Publish)\assets\icons\icon.ico" />
     <Property Id="ARPPRODUCTICON" Value="TVBoxIcon.ico" />
     <Property Id="CREATE_DESKTOP_SHORTCUT" Value="1" Secure="yes" />
+    <Property Id="LAUNCH_TVBOX" Value="1" Secure="yes" />
+    <Property Id="REGISTEREDINSTALLFOLDER" Secure="yes">
+      <RegistrySearch
+        Id="RegisteredInstallFolderSearch"
+        Root="HKLM"
+        Key="Software\TVBox for Windows"
+        Name="InstallLocation"
+        Type="raw"
+        Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER100" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder100Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{9A897342-CC56-5CE3-8072-C93BB57272E1}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER101" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder101Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{EA194475-1DB0-5530-9B57-97A75926AF5F}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER102" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder102Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{B7D7FA95-EF8D-55E1-A1C2-FF84B37FD5CB}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER103" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder103Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{C38FA9F4-D099-5EB6-8A13-5160064BB64D}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER104" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder104Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{2AAEF119-648F-5B79-ACB6-502E7A857E9C}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER105" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder105Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{74D46B84-1FB4-5D53-942E-30DE24DEF894}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER106" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder106Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{59A45120-C602-52E0-8327-BF885FC364A2}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER107" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder107Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{6AE87EC4-0D50-56C3-87FE-413883EFFB0A}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER108" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder108Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{E581180C-496D-5143-8E05-3B90AC7B4418}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER109" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder109Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{96041CE6-D104-58E0-8C18-05209449E1DF}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="LEGACYINSTALLFOLDER110" Secure="yes">
+      <RegistrySearch Id="LegacyInstallFolder110Search" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\Uninstall\{C123080D-CFE2-5C46-8D55-E2DE20194194}" Name="InstallLocation" Type="raw" Bitness="always64" />
+    </Property>
+    <Property Id="PREVIOUSINSTALLFOLDER" Secure="yes" />
+    <SetProperty
+      Id="PREVIOUSINSTALLFOLDER"
+      Value="[LEGACYINSTALLFOLDER110][LEGACYINSTALLFOLDER109][LEGACYINSTALLFOLDER108][LEGACYINSTALLFOLDER107][LEGACYINSTALLFOLDER106][LEGACYINSTALLFOLDER105][LEGACYINSTALLFOLDER104][LEGACYINSTALLFOLDER103][LEGACYINSTALLFOLDER102][LEGACYINSTALLFOLDER101][LEGACYINSTALLFOLDER100]"
+      After="AppSearch"
+      Sequence="both"
+      Condition="NOT REGISTEREDINSTALLFOLDER AND (LEGACYINSTALLFOLDER110 OR LEGACYINSTALLFOLDER109 OR LEGACYINSTALLFOLDER108 OR LEGACYINSTALLFOLDER107 OR LEGACYINSTALLFOLDER106 OR LEGACYINSTALLFOLDER105 OR LEGACYINSTALLFOLDER104 OR LEGACYINSTALLFOLDER103 OR LEGACYINSTALLFOLDER102 OR LEGACYINSTALLFOLDER101 OR LEGACYINSTALLFOLDER100)" />
+    <SetProperty
+      Id="INSTALLFOLDER"
+      Value="[REGISTEREDINSTALLFOLDER][PREVIOUSINSTALLFOLDER]"
+      After="SetPREVIOUSINSTALLFOLDER"
+      Sequence="both"
+      Condition="(REGISTEREDINSTALLFOLDER OR PREVIOUSINSTALLFOLDER) AND NOT INSTALLFOLDER" />
     <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLFOLDER]" After="CostFinalize" />
 
     <Feature Id="Complete" Title="TVBox" Level="1">
       <ComponentRef Id="MainExecutable" />
+      <ComponentRef Id="InstallLocationRegistry" />
       <ComponentRef Id="StartMenuShortcut" />
       <ComponentRef Id="DesktopShortcut" />
       <ComponentGroupRef Id="PublishedFiles" />
@@ -32,6 +89,24 @@
     <Component Id="MainExecutable" Directory="INSTALLFOLDER" Bitness="always64">
       <File Id="TVBoxExe" Source="!(bindpath.Publish)\TVBox.exe" KeyPath="yes" />
     </Component>
+
+    <Component Id="InstallLocationRegistry" Directory="INSTALLFOLDER" Bitness="always64">
+      <RegistryValue
+        Root="HKLM"
+        Key="Software\TVBox for Windows"
+        Name="InstallLocation"
+        Type="string"
+        Value="[INSTALLFOLDER]"
+        KeyPath="yes" />
+    </Component>
+
+    <CustomAction
+      Id="LaunchTVBox"
+      FileRef="TVBoxExe"
+      ExeCommand=""
+      Execute="immediate"
+      Impersonate="yes"
+      Return="asyncNoWait" />
 
     <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Bitness="always64">
       <Shortcut
@@ -117,14 +192,14 @@
       <DialogRef Id="ResumeDlg" />
       <DialogRef Id="UserExit" />
 
-      <Dialog Id="ShortcutDlg" Width="370" Height="270" Title="TVBox 安装设置">
-        <Control Id="Next" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" Text="下一步(&amp;N)" />
+      <Dialog Id="InstallOptionsDlg" Width="370" Height="270" Title="TVBox 安装设置">
+        <Control Id="Install" Type="PushButton" X="236" Y="243" Width="56" Height="17" Default="yes" ElevationShield="yes" Text="安装(&amp;I)" />
         <Control Id="Back" Type="PushButton" X="180" Y="243" Width="56" Height="17" Text="上一步(&amp;B)" />
         <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="取消">
           <Publish Event="SpawnDialog" Value="CancelDlg" />
         </Control>
-        <Control Id="Description" Type="Text" X="25" Y="23" Width="280" Height="15" Transparent="yes" NoPrefix="yes" Text="选择要创建的快捷方式" />
-        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="快捷方式" />
+        <Control Id="Description" Type="Text" X="25" Y="23" Width="310" Height="15" Transparent="yes" NoPrefix="yes" Text="确认安装选项，然后开始安装" />
+        <Control Id="Title" Type="Text" X="15" Y="6" Width="200" Height="15" Transparent="yes" NoPrefix="yes" Text="安装选项" />
         <Control Id="BannerBitmap" Type="Bitmap" X="0" Y="0" Width="370" Height="44" TabSkip="no" Text="!(loc.InstallDirDlgBannerBitmap)" />
         <Control Id="BannerLine" Type="Line" X="0" Y="44" Width="373" Height="0" />
         <Control Id="BottomLine" Type="Line" X="0" Y="234" Width="373" Height="0" />
@@ -138,26 +213,40 @@
           Property="CREATE_DESKTOP_SHORTCUT"
           CheckBoxValue="1"
           Text="创建桌面快捷方式(&amp;D)" />
-        <Control Id="StartMenuNotice" Type="Text" X="25" Y="105" Width="310" Height="30" Text="开始菜单快捷方式将自动创建。" />
+        <Control
+          Id="LaunchAfterInstall"
+          Type="CheckBox"
+          X="25"
+          Y="103"
+          Width="300"
+          Height="17"
+          Property="LAUNCH_TVBOX"
+          CheckBoxValue="1"
+          Text="安装完成后启动 TVBox(&amp;L)" />
+        <Control Id="StartMenuNotice" Type="Text" X="25" Y="133" Width="310" Height="30" Text="开始菜单快捷方式将自动创建。" />
       </Dialog>
 
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchTVBox" Order="1" Condition="LAUNCH_TVBOX = &quot;1&quot; AND NOT Installed" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="InstallDirDlg" Condition="NOT Installed" />
       <Publish Dialog="WelcomeDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Condition="Installed AND PATCH" />
 
       <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
       <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="3" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="ShortcutDlg" Order="4" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="InstallOptionsDlg" Order="4" />
       <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
       <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
 
-      <Publish Dialog="BrowseDlg" Control="OK" Event="SetTargetPath" Value="[_BrowseProperty]" Order="3" />
-      <Publish Dialog="BrowseDlg" Control="OK" Event="EndDialog" Value="Return" Order="4" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SetTargetPath" Value="[_BrowseProperty]" Order="4" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="EndDialog" Value="Return" Order="5" />
 
-      <Publish Dialog="ShortcutDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
-      <Publish Dialog="ShortcutDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" />
+      <Publish Dialog="InstallOptionsDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" />
+      <Publish Dialog="InstallOptionsDlg" Control="Install" Event="EndDialog" Value="Return" Order="1" Condition="OutOfDiskSpace &lt;&gt; 1" />
+      <Publish Dialog="InstallOptionsDlg" Control="Install" Event="SpawnDialog" Value="OutOfRbDiskDlg" Order="2" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND (PROMPTROLLBACKCOST = &quot;P&quot; OR NOT PROMPTROLLBACKCOST)" />
+      <Publish Dialog="InstallOptionsDlg" Control="Install" Event="EndDialog" Value="Return" Order="3" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND PROMPTROLLBACKCOST = &quot;D&quot;" />
+      <Publish Dialog="InstallOptionsDlg" Control="Install" Event="EnableRollback" Value="False" Order="4" Condition="OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 0 AND PROMPTROLLBACKCOST = &quot;D&quot;" />
+      <Publish Dialog="InstallOptionsDlg" Control="Install" Event="SpawnDialog" Value="OutOfDiskDlg" Order="5" Condition="(OutOfDiskSpace = 1 AND OutOfNoRbDiskSpace = 1) OR (OutOfDiskSpace = 1 AND PROMPTROLLBACKCOST = &quot;F&quot;)" />
 
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="ShortcutDlg" Order="1" Condition="NOT Installed" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="2" Condition="Installed AND PATCH" />
 

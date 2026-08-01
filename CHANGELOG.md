@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.0.10 - 2026-08-01
+
+### Fixed
+
+- Restore the existing custom installation directory during upgrades and reinstalls, including migration from previously released MSI packages.
+- Combine desktop-shortcut and post-install launch choices on the final installation-options page, and reduce installer extraction overhead.
+
 ## 1.0.9 - 2026-08-01
 
 ### Fixed
