@@ -11,6 +11,8 @@ public class PlayerCore : IDisposable
     const string TAG = "PlayerCore";
     const string MissingFFmpegMsg = "FFmpeg 解码库未就绪：安装内容可能不完整，请重新安装或完整解压 TVBox";
     const long TransferSampleIntervalMs = 500;
+    const long SeekRequestTimeoutMs = 8000;
+    const int SeekFailureSettleMs = 150;
     static readonly string[] RequiredFFmpegLibraries =
     {
         "avcodec-62.dll",
@@ -43,9 +45,14 @@ public class PlayerCore : IDisposable
     bool _disposed;
     bool _uiUpdatesEnabled = true;
     readonly object _subtitleLock = new();
+    readonly object _seekLock = new();
     SubtitleOpenRequest _subtitleActive;
     SubtitleOpenRequest _subtitlePending;
     long _subtitleRequestId;
+    SeekRequest _activeSeek;
+    long _seekRequestId;
+    bool _flyBuffering;
+    int _videoFramesObservedGeneration;
     long _transferSampleTick;
     long _transferSampleBytes;
     int _transferSampleGeneration = -1;
@@ -60,6 +67,8 @@ public class PlayerCore : IDisposable
     public event Action<double> TransferRateChanged;
     /// <summary>播放中的缓冲状态（UI 线程；起播阶段由 Opened/Errored 管理）。</summary>
     public event Action<bool> BufferingChanged;
+    /// <summary>最后一个合并后的定位请求完成（请求 id、目标毫秒、是否成功，UI 线程）。</summary>
+    public event Action<long, long, bool> SeekFinished;
 
     /// <summary>App 启动时调用一次：探测 ffmpeg 目录并 Engine.Start。缺失时 EngineReady=false（不自动下载）。</summary>
     public static void StartEngine()
@@ -77,7 +86,9 @@ public class PlayerCore : IDisposable
             FlyleafLib.Engine.Start(new EngineConfig
             {
                 FFmpegPath = dir,
-                UIRefresh = false,
+                // FramesDisplayed and paused buffered duration require Flyleaf's
+                // master refresh thread. The video watchdog must never read stale stats.
+                UIRefresh = true,
             });
             EngineReady = true;
             Core.Logger.D(TAG, "FFmpeg 引擎已启动: " + dir);
@@ -107,6 +118,7 @@ public class PlayerCore : IDisposable
         {
             var config = new Config();
             config.Player.AutoPlay = true;
+            config.Player.Stats = true;
             // Keyframe seeking keeps repeated jumps responsive on remote HLS/HTTP media.
             config.Player.SeekAccurate = false;
             config.Demuxer.OpenTimeout = TimeSpan.FromMilliseconds(Math.Max(Setting.PlayTimeout, 15000)).Ticks;
@@ -128,6 +140,7 @@ public class PlayerCore : IDisposable
             Fly.PlaybackStopped += OnPlaybackStopped;
             Fly.BufferingStarted += OnBufferingStarted;
             Fly.BufferingCompleted += OnBufferingCompleted;
+            Fly.SeekCompleted += OnSeekCompleted;
         }
         catch (Exception e) { Core.Logger.E(TAG, "创建播放器失败: " + e.Message); }
         App.Post(() =>
@@ -144,6 +157,8 @@ public class PlayerCore : IDisposable
     {
         if (_disposed || Fly == null) return;
         SampleTransferRate();
+        CheckSeekTimeout();
+        ObserveVideoFrames();
         if (Fly.CanPlay) TimeChanged?.Invoke(PositionMs);
     }
 
@@ -161,18 +176,27 @@ public class PlayerCore : IDisposable
 
     void SampleTransferRate()
     {
+        var generation = Volatile.Read(ref _openGeneration);
+        if (_item == null || Volatile.Read(ref _openingGeneration) != 0 ||
+            Volatile.Read(ref _activePlaybackGeneration) != generation)
+            return;
         var totalBytes = ReadTransferBytes();
         if (totalBytes < 0) return;
 
         var now = Environment.TickCount64;
-        var generation = Volatile.Read(ref _openGeneration);
-        if (_transferSampleGeneration != generation || _transferSampleTick == 0 ||
-            totalBytes < _transferSampleBytes)
+        if (_transferSampleGeneration != generation)
         {
             _transferSampleGeneration = generation;
             _transferSampleTick = now;
-            _transferSampleBytes = totalBytes;
+            _transferSampleBytes = 0;
             return;
+        }
+
+        if (totalBytes < _transferSampleBytes)
+        {
+            // A demuxer replacement reset its counter. Preserve the sampling window
+            // but restart the byte baseline so the new source's first bytes count.
+            _transferSampleBytes = 0;
         }
 
         var elapsedMs = now - _transferSampleTick;
@@ -189,9 +213,14 @@ public class PlayerCore : IDisposable
         try
         {
             if (Fly == null) return -1;
-            return Math.Max(0, Fly.VideoDemuxer?.TotalBytes ?? 0) +
-                   Math.Max(0, Fly.AudioDemuxer?.TotalBytes ?? 0) +
-                   Math.Max(0, Fly.SubtitlesDemuxer?.TotalBytes ?? 0);
+            var video = Fly.VideoDemuxer;
+            var audio = Fly.AudioDemuxer;
+            var subtitles = Fly.SubtitlesDemuxer;
+            var total = Math.Max(0, video?.TotalBytes ?? 0);
+            if (!ReferenceEquals(audio, video)) total += Math.Max(0, audio?.TotalBytes ?? 0);
+            if (!ReferenceEquals(subtitles, video) && !ReferenceEquals(subtitles, audio))
+                total += Math.Max(0, subtitles?.TotalBytes ?? 0);
+            return total;
         }
         catch { return -1; }
     }
@@ -201,7 +230,7 @@ public class PlayerCore : IDisposable
         // Flyleaf resets demuxer counters asynchronously while replacing a source.
         // Let the first timer tick establish a baseline so bytes left by the previous
         // source cannot appear as a transient transfer-rate spike.
-        _transferSampleTick = 0;
+        _transferSampleTick = Environment.TickCount64;
         _transferSampleBytes = 0;
         _transferSampleGeneration = generation;
         if (notify && !_disposed) TransferRateChanged?.Invoke(0);
@@ -209,7 +238,8 @@ public class PlayerCore : IDisposable
 
     public static string FormatTransferRate(double bytesPerSecond)
     {
-        if (!double.IsFinite(bytesPerSecond) || bytesPerSecond <= 0) return "0 B/s";
+        if (!double.IsFinite(bytesPerSecond) || bytesPerSecond < 0) return "正在连接…";
+        if (bytesPerSecond == 0) return "0 B/s";
         if (bytesPerSecond >= 1024 * 1024) return $"{bytesPerSecond / (1024 * 1024):0.0} MB/s";
         if (bytesPerSecond >= 1024) return $"{bytesPerSecond / 1024:0} KB/s";
         return $"{bytesPerSecond:0} B/s";
@@ -220,6 +250,7 @@ public class PlayerCore : IDisposable
         if (item == null || string.IsNullOrWhiteSpace(item.Url))
         {
             var invalidGeneration = Interlocked.Increment(ref _openGeneration);
+            ResetSeekRequests();
             ResetTransferSampling(true, invalidGeneration);
             Volatile.Write(ref _openingGeneration, 0);
             Volatile.Write(ref _activePlaybackGeneration, 0);
@@ -230,6 +261,7 @@ public class PlayerCore : IDisposable
         lock (_subtitleLock) _subtitlePending = null;
         var request = Snapshot(item);
         var generation = Interlocked.Increment(ref _openGeneration);
+        ResetSeekRequests();
         ResetTransferSampling(true, generation);
         Volatile.Write(ref _activePlaybackGeneration, 0);
         _item = request;
@@ -268,6 +300,7 @@ public class PlayerCore : IDisposable
     public void Stop()
     {
         Interlocked.Increment(ref _openGeneration);
+        ResetSeekRequests();
         Volatile.Write(ref _openingGeneration, 0);
         Volatile.Write(ref _activePlaybackGeneration, 0);
         _item = null;
@@ -277,13 +310,149 @@ public class PlayerCore : IDisposable
 
     public void PlayPause() { try { Fly?.TogglePlayPause(); } catch { } }
 
-    public void SeekMs(long ms)
+    public long SeekMs(long ms)
     {
+        if (_disposed || Fly == null || !Fly.CanPlay) return 0;
+        var playbackGeneration = Volatile.Read(ref _activePlaybackGeneration);
+        if (playbackGeneration <= 0 || playbackGeneration != Volatile.Read(ref _openGeneration) ||
+            Volatile.Read(ref _openingGeneration) != 0) return 0;
+
+        var target = (int)Math.Min(int.MaxValue, Math.Max(0, ms));
+        SeekRequest queued;
+        lock (_seekLock)
+        {
+            queued = new SeekRequest(++_seekRequestId, target, playbackGeneration);
+            // Flyleaf's playing path already maintains a latest-wins seek stack.
+            // Replacing our correlation record preserves that behavior instead of
+            // serializing stale targets ahead of the user's newest request.
+            queued.BufferingObserved = _flyBuffering;
+            _activeSeek = queued;
+        }
+
+        QueueSeekStart(queued);
+        return queued.Id;
+    }
+
+    void QueueSeekStart(SeekRequest request) => App.Post(() => StartSeek(request.Id));
+
+    void StartSeek(long expectedId)
+    {
+        SeekRequest request;
+        lock (_seekLock)
+        {
+            if (_activeSeek == null || _activeSeek.Id != expectedId || _activeSeek.CompletionQueued) return;
+            request = _activeSeek;
+            request.StartedTick = Environment.TickCount64;
+        }
+
+        if (_disposed || Fly == null || !Fly.CanPlay ||
+            request.PlaybackGeneration != Volatile.Read(ref _activePlaybackGeneration) ||
+            request.PlaybackGeneration != Volatile.Read(ref _openGeneration) ||
+            Volatile.Read(ref _openingGeneration) != 0)
+        {
+            QueueSeekCompletion(request, false);
+            return;
+        }
+
         try
         {
-            if (Fly == null) return;
-            var target = (int)Math.Min(int.MaxValue, Math.Max(0, ms));
-            Fly.Seek(target, target > PositionMs);
+            var origin = PositionMs;
+            Fly.Seek(request.TargetMs, request.TargetMs > origin);
+        }
+        catch (Exception error)
+        {
+            Core.Logger.E(TAG, "定位失败: " + error.Message);
+            QueueSeekCompletion(request, false);
+        }
+    }
+
+    void OnSeekCompleted(object sender, int completedMs)
+    {
+        SeekRequest request;
+        lock (_seekLock) request = _activeSeek;
+        if (request == null) return;
+        if (completedMs < 0)
+        {
+            // Some audio-only paused paths emit -1 immediately before their successful
+            // target callback. Give that callback a brief chance to supersede failure.
+            _ = CompleteSeekFailureAfterSettleAsync(request);
+            return;
+        }
+        // Playing seeks finish through the final BufferingCompleted event; paused seeks
+        // report their exact target here. A stale callback cannot finish a newer target.
+        if (completedMs == request.TargetMs) QueueSeekCompletion(request, true);
+    }
+
+    async Task CompleteSeekFailureAfterSettleAsync(SeekRequest request)
+    {
+        await Task.Delay(SeekFailureSettleMs).ConfigureAwait(false);
+        QueueSeekCompletion(request, false);
+    }
+
+    void QueueSeekCompletion(SeekRequest request, bool success)
+    {
+        lock (_seekLock)
+        {
+            if (_activeSeek == null || _activeSeek.Id != request.Id || _activeSeek.CompletionQueued) return;
+            _activeSeek.CompletionQueued = true;
+        }
+        App.Post(() => CompleteSeek(request.Id, success));
+    }
+
+    void CompleteSeek(long expectedId, bool success)
+    {
+        SeekRequest finished;
+        bool buffering;
+        lock (_seekLock)
+        {
+            if (_activeSeek == null || _activeSeek.Id != expectedId) return;
+            finished = _activeSeek;
+            _activeSeek = null;
+            buffering = _flyBuffering;
+        }
+
+        SeekFinished?.Invoke(finished.Id, finished.TargetMs, success);
+        if (!buffering) RaiseBufferingChanged(false);
+    }
+
+    void CheckSeekTimeout()
+    {
+        SeekRequest timedOut = null;
+        var now = Environment.TickCount64;
+        lock (_seekLock)
+        {
+            if (_activeSeek is { CompletionQueued: false, StartedTick: > 0 } active &&
+                now - active.StartedTick >= SeekRequestTimeoutMs)
+            {
+                timedOut = active;
+            }
+        }
+
+        if (timedOut != null)
+        {
+            Core.Logger.E(TAG, $"定位超时: {timedOut.TargetMs}ms");
+            QueueSeekCompletion(timedOut, false);
+        }
+    }
+
+    void ResetSeekRequests()
+    {
+        lock (_seekLock)
+        {
+            _seekRequestId++;
+            _activeSeek = null;
+            _flyBuffering = false;
+        }
+    }
+
+    void ObserveVideoFrames()
+    {
+        var generation = Volatile.Read(ref _activePlaybackGeneration);
+        if (generation <= 0 || generation != Volatile.Read(ref _openGeneration)) return;
+        try
+        {
+            if (Fly?.Video?.FramesDisplayed > 0)
+                Volatile.Write(ref _videoFramesObservedGeneration, generation);
         }
         catch { }
     }
@@ -430,6 +599,7 @@ public class PlayerCore : IDisposable
     public long DurationMs { get { try { return Fly == null ? 0 : Fly.Duration / 10000; } catch { return 0; } } }
 
     public bool IsPlaying { get { try { return Fly != null && Fly.IsPlaying; } catch { return false; } } }
+    public bool IsBuffering { get { lock (_seekLock) return _flyBuffering; } }
 
     /// <summary>填充模式所需 Zoom：按视频 DAR 与控件比例计算裁切放大倍数。</summary>
     double CoverZoom()
@@ -513,9 +683,54 @@ public class PlayerCore : IDisposable
         catch { }
     }
 
-    void OnBufferingStarted(object sender, EventArgs e) => RaiseBufferingChanged(true);
+    void OnBufferingStarted(object sender, EventArgs e)
+    {
+        var generation = Volatile.Read(ref _activePlaybackGeneration);
+        var currentGeneration = Volatile.Read(ref _openGeneration);
+        var openingGeneration = Volatile.Read(ref _openingGeneration);
+        if (_item == null || currentGeneration <= 0) return;
+        if (openingGeneration == currentGeneration)
+        {
+            lock (_seekLock) _flyBuffering = true;
+            return;
+        }
+        if (generation <= 0 || generation != currentGeneration || openingGeneration != 0) return;
+        lock (_seekLock)
+        {
+            _flyBuffering = true;
+            if (_activeSeek is { StartedTick: > 0 } active && active.PlaybackGeneration == generation)
+                active.BufferingObserved = true;
+        }
+        RaiseBufferingChanged(true);
+    }
 
-    void OnBufferingCompleted(object sender, BufferingCompletedArgs e) => RaiseBufferingChanged(false);
+    void OnBufferingCompleted(object sender, BufferingCompletedArgs e)
+    {
+        var generation = Volatile.Read(ref _activePlaybackGeneration);
+        var currentGeneration = Volatile.Read(ref _openGeneration);
+        var openingGeneration = Volatile.Read(ref _openingGeneration);
+        if (_item == null || currentGeneration <= 0) return;
+        if (openingGeneration == currentGeneration)
+        {
+            lock (_seekLock) _flyBuffering = false;
+            return;
+        }
+        if (generation <= 0 || generation != currentGeneration || openingGeneration != 0) return;
+
+        SeekRequest completed = null;
+        lock (_seekLock)
+        {
+            _flyBuffering = false;
+            if (_activeSeek is { BufferingObserved: true, StartedTick: > 0 } active &&
+                active.PlaybackGeneration == generation)
+            {
+                completed = active;
+            }
+        }
+
+        if (completed != null) QueueSeekCompletion(completed, e.Success);
+        else RaiseBufferingChanged(false);
+    }
 
     void RaiseBufferingChanged(bool buffering)
     {
@@ -583,6 +798,7 @@ public class PlayerCore : IDisposable
             }
             if (Fly.Status == Status.Ended)
             {
+                ResetSeekRequests();
                 PostIfCurrent(generation, () => Ended?.Invoke());
                 return;
             }
@@ -594,6 +810,7 @@ public class PlayerCore : IDisposable
                     return;
                 }
                 var error = e.Error;
+                ResetSeekRequests();
                 PostIfCurrent(generation, () => Errored?.Invoke(error));
             }
         }
@@ -638,11 +855,22 @@ public class PlayerCore : IDisposable
             {
                 if (_disposed || generation != Volatile.Read(ref _openGeneration) || !ReferenceEquals(item, _item) ||
                     _videoRecoveryTried || Fly?.Video?.IsOpened != true) return;
-                if (!Fly.IsPlaying || Fly.Video.FramesDisplayed > 0) return;
+                if (!Fly.IsPlaying || Volatile.Read(ref _videoFramesObservedGeneration) == generation ||
+                    Fly.Video.FramesDisplayed > 0) return;
+                lock (_seekLock)
+                {
+                    if (_flyBuffering || _activeSeek != null)
+                    {
+                        StartVideoWatchdog(generation, item);
+                        return;
+                    }
+                }
                 _videoRecoveryTried = true;
                 _recovering = true;
                 var position = PositionMs;
                 item.StartPositionMs = Math.Max(item.StartPositionMs, position);
+                ResetSeekRequests();
+                ResetTransferSampling(true, generation);
                 Volatile.Write(ref _openingGeneration, generation);
                 _ignorePlaybackStopUntil = Environment.TickCount64 + 2500;
                 Fly.Config.Video.VideoAcceleration = false;
@@ -694,6 +922,7 @@ public class PlayerCore : IDisposable
         if (_disposed) return;
         _disposed = true;
         Interlocked.Increment(ref _openGeneration);
+        ResetSeekRequests();
         Volatile.Write(ref _openingGeneration, 0);
         Volatile.Write(ref _activePlaybackGeneration, 0);
         _item = null;
@@ -711,6 +940,7 @@ public class PlayerCore : IDisposable
                 Fly.PlaybackStopped -= OnPlaybackStopped;
                 Fly.BufferingStarted -= OnBufferingStarted;
                 Fly.BufferingCompleted -= OnBufferingCompleted;
+                Fly.SeekCompleted -= OnSeekCompleted;
                 Fly.Dispose();
             }
         }
@@ -718,6 +948,25 @@ public class PlayerCore : IDisposable
     }
 
     sealed record SubtitleOpenRequest(long Id, string Path);
+
+    sealed class SeekRequest
+    {
+        public SeekRequest(long id, int targetMs, int playbackGeneration)
+        {
+            Id = id;
+            TargetMs = targetMs;
+            PlaybackGeneration = playbackGeneration;
+            CreatedTick = Environment.TickCount64;
+        }
+
+        public long Id { get; }
+        public int TargetMs { get; }
+        public int PlaybackGeneration { get; }
+        public long CreatedTick { get; }
+        public long StartedTick { get; set; }
+        public bool BufferingObserved { get; set; }
+        public bool CompletionQueued { get; set; }
+    }
 }
 
 /// <summary>可播条目（PlayResolver 产出）。</summary>

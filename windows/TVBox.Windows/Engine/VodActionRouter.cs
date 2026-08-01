@@ -14,11 +14,10 @@ public static class VodActionRouter
 
         var site = VodConfigService.Instance.GetSite(siteKey);
         if (site.SearchByName) return true;
-        if (!Uri.TryCreate(NodeRuntime.BaseUrl, UriKind.Absolute, out var nodeUri) ||
-            !Uri.TryCreate(site?.Api, UriKind.Absolute, out var siteUri)) return false;
-        if (!string.Equals(nodeUri.Scheme, siteUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(nodeUri.Host, siteUri.Host, StringComparison.OrdinalIgnoreCase) ||
-            nodeUri.Port != siteUri.Port) return false;
+        var source = VodConfigService.Instance.Config?.Url;
+        if (string.IsNullOrWhiteSpace(source)) source = Setting.ConfigVod;
+        if (!NodeSource.MaybeNode(UrlUtil.Convert(source ?? "")) ||
+            !Uri.TryCreate(site?.Api, UriKind.Absolute, out var siteUri) || !siteUri.IsLoopback) return false;
 
         var segments = siteUri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (segments.Length < 2 || !segments[0].Equals("spider", StringComparison.OrdinalIgnoreCase)) return false;
@@ -35,7 +34,19 @@ public static class VodActionRouter
         {
             // CatPaw advertises a LAN address, but the Windows bootstrap intentionally binds
             // to loopback. Always open the reachable local website for an in-app click.
-            var baseUrl = NodeRuntime.BaseUrl;
+            string baseUrl;
+            try
+            {
+                baseUrl = await VodConfigService.Instance.RestoreCurrentNodeAsync();
+            }
+            catch (Exception e)
+            {
+                Logger.E("VodActionRouter", "恢复配置中心服务失败: " + e.Message);
+                return ActionRouteResult.Handled("配置中心服务启动失败: " + e.Message);
+            }
+            if (string.IsNullOrWhiteSpace(baseUrl) || !await NodeRuntime.IsCurrentHealthyAsync())
+                return ActionRouteResult.Handled("配置中心服务暂时不可用，请稍后重试");
+
             var configUrl = VodConfigService.Instance.Config?.Url;
             var website = baseUrl?.TrimEnd('/') + "/website";
             var watching = NodeConfigChangeMonitor.Start(
@@ -64,7 +75,9 @@ public static class VodActionRouter
 
     static bool IsNodeConfigCenter(Site site, string vodId)
     {
-        if (NodeRuntime.BaseUrl == null || !IsNodeConfigSite(site)) return false;
+        var source = VodConfigService.Instance.Config?.Url;
+        if (string.IsNullOrWhiteSpace(source)) source = Setting.ConfigVod;
+        if (!NodeSource.MaybeNode(UrlUtil.Convert(source ?? "")) || !IsNodeConfigSite(site)) return false;
         if (IsHttp(vodId)) return Uri.TryCreate(vodId.Trim(), UriKind.Absolute, out var uri) &&
                                       uri.AbsolutePath.TrimEnd('/').EndsWith("/website", StringComparison.OrdinalIgnoreCase);
         return string.Equals(vodId, "config-center", StringComparison.OrdinalIgnoreCase) ||

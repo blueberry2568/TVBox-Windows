@@ -105,6 +105,12 @@ public class LiveConfigService
 
         if (NodeSource.MaybeNode(target))
         {
+            var vodSource = VodConfigService.Instance.Config?.Url;
+            if (string.IsNullOrWhiteSpace(vodSource)) vodSource = Setting.ConfigVod;
+            if (NodeSource.IsCurrentRuntimeSource(UrlUtil.Convert(vodSource ?? "")) &&
+                !SameAddress(target, vodSource))
+                allowNodeFallback = false;
+
             var catPaw = await TryLoadCatPawLives(target, preferCache, allowNodeFallback);
             if (catPaw != null)
             {
@@ -212,6 +218,8 @@ public class LiveConfigService
         var previousBase = NodeRuntime.BaseUrl;
         var previousVod = VodConfigService.Instance.Config?.Url ?? "";
         var sameAsVod = SameAddress(sourceUrl, previousVod);
+        var previousVodWasActive = !sameAsVod && !string.IsNullOrWhiteSpace(previousBase) &&
+                                   NodeSource.IsCurrentRuntimeSource(UrlUtil.Convert(previousVod));
         try
         {
             var flat = preferCache ? await NodeSource.TryLoadCachedAsync(sourceUrl) : null;
@@ -226,7 +234,7 @@ public class LiveConfigService
         }
         finally
         {
-            if (!sameAsVod && !string.IsNullOrWhiteSpace(previousBase) && NodeSource.MaybeNode(previousVod))
+            if (previousVodWasActive)
             {
                 try
                 {

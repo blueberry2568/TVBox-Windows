@@ -17,6 +17,26 @@ public static class NodeSource
     public static bool MaybeNode(string url) =>
         HasSuffix(url, ".js.md5") || HasSuffix(url, ".js");
 
+    internal static Task<bool> IsCurrentRuntimeHealthyAsync(
+        string url,
+        CancellationToken cancellationToken = default)
+    {
+        var paths = GetCachedPaths(url);
+        return paths == null
+            ? Task.FromResult(false)
+            : NodeRuntime.IsCurrentSourceHealthyAsync(
+                paths.Value.ScriptPath,
+                paths.Value.ConfigPath,
+                cancellationToken);
+    }
+
+    internal static bool IsCurrentRuntimeSource(string url)
+    {
+        var paths = GetCachedPaths(url);
+        return paths != null &&
+               NodeRuntime.MatchesCurrentSource(paths.Value.ScriptPath, paths.Value.ConfigPath);
+    }
+
     // Bare .js URLs can also point to ordinary Jint spiders. Explicit .js.md5 subscriptions
     // are trusted as CatPawOpen only after their advertised checksum has been verified.
     static bool LooksLikeNode(string js) =>
@@ -337,6 +357,18 @@ public static class NodeSource
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(url ?? ""));
         return Convert.ToHexString(bytes).ToLowerInvariant()[..24];
+    }
+
+    static (string ScriptPath, string ConfigPath)? GetCachedPaths(string url)
+    {
+        if (!MaybeNode(url)) return null;
+        try
+        {
+            var jsUrl = HasSuffix(url, ".js.md5") ? ReplaceSuffix(url, ".js.md5", ".js") : url;
+            var sourceDir = Path.Combine(AppPaths.Node, "source-" + SourceKey(jsUrl));
+            return (Path.Combine(sourceDir, "index.js"), Path.Combine(sourceDir, "index.config.js"));
+        }
+        catch { return null; }
     }
 
     static bool HasSuffix(string url, string suffix)

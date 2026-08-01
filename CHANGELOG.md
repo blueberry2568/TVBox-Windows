@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 1.0.8 - 2026-08-01
+
+### Fixed
+
+- Recover the local CatPawOpen service when its Node process exits and prevent live-source probing from replacing the active video-source runtime.
+- Preserve video detail state when returning from playback instead of reloading the page.
+- Improve startup and buffering transfer-rate reporting, including the first downloaded bytes, and keep loading surfaces opaque.
+- Let Flyleaf coalesce repeated seeks, pin video and time-shift progress to the newest target, and prevent stale callbacks from moving progress backward.
+- Enable the frame statistics used by hardware-decoder recovery so normal playback is not falsely reopened after five seconds.
+
 ## 1.0.7 - 2026-08-01
 
 ### Added

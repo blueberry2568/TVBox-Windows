@@ -142,6 +142,10 @@
                       PointerMoved="OnPlayerPointerMoved"
                       SizeChanged="OnPlayerAreaSizeChanged">
                 <fl:FlyleafHost x:Name="VideoHost" KeyBindings="False" Background="Transparent"/>
+                <Border x:Name="LivePlaybackLoadingBackdrop"
+                        Background="#FF000000"
+                        IsHitTestVisible="False"
+                        Visibility="Collapsed"/>
 
                 <!-- 交互层：接收双击/单击（FlyleafHost 自身可能吞掉指针事件） -->
                 <Grid x:Name="InteractLayer" Background="Transparent"
@@ -181,7 +185,7 @@
                                 Visibility="Collapsed">
                         <FontIcon Glyph="&#xE896;" FontSize="12"
                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock x:Name="LiveLoadingSpeedText" Text="0 B/s" FontSize="13"
+                        <TextBlock x:Name="LiveLoadingSpeedText" Text="正在连接…" FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
                 </StackPanel>

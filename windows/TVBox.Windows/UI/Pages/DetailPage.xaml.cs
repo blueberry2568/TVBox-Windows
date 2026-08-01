@@ -24,6 +24,8 @@ public sealed partial class DetailPage : Page
     int _flagIndex;
     int _segment;
     bool _reverse, _squelch;
+    string _contentKey = "";
+    int _loadVersion;
 
     public DetailPage() => InitializeComponent();
 
@@ -32,22 +34,49 @@ public sealed partial class DetailPage : Page
         base.OnNavigatedTo(e);
         if (e.Parameter is not DetailArgs args) return;
         // PushUrl 场景：SiteKey 空 → 空站点（SiteService.DetailContent 的 push 分支），vodId=PushUrl
-        _site = VodConfigService.Instance.GetSite(args.SiteKey);
-        _vodId = string.IsNullOrEmpty(args.PushUrl) ? args.VodId : args.PushUrl;
+        var site = VodConfigService.Instance.GetSite(args.SiteKey);
+        var vodId = string.IsNullOrEmpty(args.PushUrl) ? args.VodId : args.PushUrl;
+        var contentKey = (args.SiteKey ?? "") + "\u001f" + (vodId ?? "");
+
+        // Returning from PlayerPage reuses this cached view. Preserve the selected
+        // line, episode ordering and scroll offset; only local store state changed.
+        if (_vod != null && string.Equals(_contentKey, contentKey, StringComparison.Ordinal))
+        {
+            MsgBar.IsOpen = false;
+            UpdatePlayButton();
+            UpdateKeepState();
+            return;
+        }
+
+        _contentKey = contentKey;
+        _site = site;
+        _vodId = vodId;
+        _vod = null;
         if (!string.IsNullOrEmpty(args.Name)) TitleText.Text = args.Name;
-        _ = LoadDetail();
+        HeroPanel.Visibility = Visibility.Collapsed;
+        FlagsPanel.Visibility = Visibility.Collapsed;
+        EpisodeGrid.ItemsSource = null;
+        DetailScrollViewer.ChangeView(null, 0, null, true);
+        _ = LoadDetail(++_loadVersion, site, vodId, contentKey);
     }
 
     // ---------- 加载与绑定 ----------
 
-    async Task LoadDetail()
+    async Task LoadDetail(int loadVersion, Site site, string vodId, string contentKey)
     {
-        if (string.IsNullOrEmpty(_vodId)) { ShowMsg("缺少内容参数"); return; }
+        if (string.IsNullOrEmpty(vodId))
+        {
+            Busy.IsActive = false;
+            ShowMsg("缺少内容参数");
+            return;
+        }
         Busy.IsActive = true;
         MsgBar.IsOpen = false;
         try
         {
-            var result = await SiteService.DetailContent(_site, _vodId);
+            var result = await SiteService.DetailContent(site, vodId);
+            if (loadVersion != _loadVersion || !string.Equals(_contentKey, contentKey, StringComparison.Ordinal))
+                return;
             if (result.List.Count == 0)
             {
                 ShowMsg(string.IsNullOrEmpty(result.Msg) ? "没有找到内容" : result.Msg);
@@ -57,10 +86,14 @@ public sealed partial class DetailPage : Page
         }
         catch (Exception e)
         {
+            if (loadVersion != _loadVersion) return;
             Logger.E("DetailPage", e.Message);
             ShowMsg(e.Message);
         }
-        finally { Busy.IsActive = false; }
+        finally
+        {
+            if (loadVersion == _loadVersion) Busy.IsActive = false;
+        }
     }
 
     void Bind(Vod vod)

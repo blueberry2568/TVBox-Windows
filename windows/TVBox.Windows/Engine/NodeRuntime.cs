@@ -13,6 +13,7 @@ public static class NodeRuntime
     const string Tag = "NodeRuntime";
 
     static readonly SemaphoreSlim Lock = new(1, 1);
+    static readonly object StateSync = new();
     static Process _proc;
     static Process _startingProc;
     static CancellationTokenSource _startupCts;
@@ -21,6 +22,9 @@ public static class NodeRuntime
     static string _sourceVersion;
     static string _startupError;
     static int _shutdownRequested;
+    static long _generationSeed;
+    static long _activeGeneration;
+    static string _baseUrl;
 
     static readonly Regex QueryPattern = new(
         @"\?(?=[A-Za-z0-9_.%~-]+=)[^'""\s<>{}\[\]]+",
@@ -32,7 +36,7 @@ public static class NodeRuntime
     public static bool NodeReady => NodePath != null;
     public static string NodePath { get; private set; }
     public static string LastError { get; private set; }
-    public static string BaseUrl { get; private set; }
+    public static string BaseUrl { get { lock (StateSync) return _baseUrl; } }
 
     public static bool EnsureNode()
     {
@@ -92,6 +96,7 @@ public static class NodeRuntime
         await Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
         CancellationTokenSource startupCts = null;
         Process candidate = null;
+        long candidateGeneration = 0;
         try
         {
             if (Volatile.Read(ref _shutdownRequested) != 0)
@@ -102,11 +107,31 @@ public static class NodeRuntime
             scriptPath = Path.GetFullPath(scriptPath);
             configPath = Path.GetFullPath(configPath);
             dataDir = Path.GetFullPath(dataDir);
-            if (_proc is { HasExited: false } && BaseUrl != null &&
-                string.Equals(_scriptPath, scriptPath, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(_configPath, configPath, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(_sourceVersion, sourceVersion, StringComparison.Ordinal))
-                return BaseUrl;
+            Process reusable = null;
+            string reusableBaseUrl = null;
+            long reusableGeneration = 0;
+            lock (StateSync)
+            {
+                if (_proc != null && _baseUrl != null &&
+                    string.Equals(_scriptPath, scriptPath, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(_configPath, configPath, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(_sourceVersion, sourceVersion, StringComparison.Ordinal))
+                {
+                    reusable = _proc;
+                    reusableBaseUrl = _baseUrl;
+                    reusableGeneration = _activeGeneration;
+                }
+            }
+            if (IsRunning(reusable) &&
+                await ProbeAsync(reusableBaseUrl, cancellationToken).ConfigureAwait(false))
+            {
+                lock (StateSync)
+                {
+                    if (ReferenceEquals(_proc, reusable) && _activeGeneration == reusableGeneration &&
+                        string.Equals(_baseUrl, reusableBaseUrl, StringComparison.OrdinalIgnoreCase))
+                        return _baseUrl;
+                }
+            }
 
             LastError = null;
             _startupError = null;
@@ -181,6 +206,8 @@ public static class NodeRuntime
                 candidate = null;
                 return null;
             }
+            candidateGeneration = Interlocked.Increment(ref _generationSeed);
+            ObserveExit(candidate, candidateGeneration);
             _startingProc = candidate;
             Pipe(candidate, candidate.StandardOutput, false);
             Pipe(candidate, candidate.StandardError, true);
@@ -199,15 +226,71 @@ public static class NodeRuntime
 
             // Keep the active service alive until its replacement is fully ready. This
             // makes a failed refresh non-destructive for pages using the current source.
-            var previous = _proc;
-            NodeConfigChangeMonitor.Stop();
-            _proc = candidate;
+            Process previous = null;
+            long previousGeneration = 0;
+            string previousScriptPath = null;
+            string previousConfigPath = null;
+            string previousSourceVersion = null;
+            string previousBaseUrl = null;
+            var promoted = candidate;
+            var promotionCancelled = false;
+            lock (StateSync)
+            {
+                promotionCancelled = Volatile.Read(ref _shutdownRequested) != 0;
+                if (!promotionCancelled)
+                {
+                    previous = _proc;
+                    previousGeneration = _activeGeneration;
+                    previousScriptPath = _scriptPath;
+                    previousConfigPath = _configPath;
+                    previousSourceVersion = _sourceVersion;
+                    previousBaseUrl = _baseUrl;
+                    _proc = candidate;
+                    _activeGeneration = candidateGeneration;
+                    _scriptPath = scriptPath;
+                    _configPath = configPath;
+                    _sourceVersion = sourceVersion;
+                    _baseUrl = baseUrl;
+                }
+            }
+            if (promotionCancelled)
+            {
+                LastError = "Node 源服务启动已取消";
+                await StopProcessAsync(candidate).ConfigureAwait(false);
+                candidate = null;
+                return null;
+            }
             candidate = null;
-            _scriptPath = scriptPath;
-            _configPath = configPath;
-            _sourceVersion = sourceVersion;
-            BaseUrl = baseUrl;
             _startingProc = null;
+            if (!IsRunning(promoted))
+            {
+                var restoredPrevious = false;
+                lock (StateSync)
+                {
+                    if (Volatile.Read(ref _shutdownRequested) == 0 &&
+                        (_proc == null || ReferenceEquals(_proc, promoted)) && IsRunning(previous))
+                    {
+                        _proc = previous;
+                        _activeGeneration = previousGeneration;
+                        _scriptPath = previousScriptPath;
+                        _configPath = previousConfigPath;
+                        _sourceVersion = previousSourceVersion;
+                        _baseUrl = previousBaseUrl;
+                        restoredPrevious = true;
+                    }
+                    else if (ReferenceEquals(_proc, promoted))
+                    {
+                        _proc = null;
+                        _activeGeneration = 0;
+                        _baseUrl = null;
+                    }
+                }
+                LastError = "Node 源服务在启动后意外退出";
+                await StopProcessAsync(promoted).ConfigureAwait(false);
+                if (!restoredPrevious) await StopProcessAsync(previous).ConfigureAwait(false);
+                return null;
+            }
+            NodeConfigChangeMonitor.Stop();
             await StopProcessAsync(previous).ConfigureAwait(false);
             Logger.D(Tag, "CatPawOpen 服务就绪: " + baseUrl);
             return BaseUrl;
@@ -254,6 +337,115 @@ public static class NodeRuntime
         return false;
     }
 
+    /// <summary>Checks that the currently published Node service still owns a live /config endpoint.</summary>
+    public static async Task<bool> IsCurrentHealthyAsync(CancellationToken cancellationToken = default)
+        => await IsCurrentSourceHealthyAsync(null, null, cancellationToken).ConfigureAwait(false);
+
+    internal static async Task<bool> IsCurrentSourceHealthyAsync(
+        string scriptPath,
+        string configPath,
+        CancellationToken cancellationToken = default)
+    {
+        if (scriptPath != null && configPath != null)
+        {
+            try
+            {
+                scriptPath = Path.GetFullPath(scriptPath);
+                configPath = Path.GetFullPath(configPath);
+            }
+            catch { return false; }
+        }
+
+        Process process;
+        string baseUrl;
+        long generation;
+        lock (StateSync)
+        {
+            if (scriptPath != null &&
+                (!string.Equals(_scriptPath, scriptPath, StringComparison.OrdinalIgnoreCase) ||
+                 !string.Equals(_configPath, configPath, StringComparison.OrdinalIgnoreCase)))
+                return false;
+            process = _proc;
+            baseUrl = _baseUrl;
+            generation = _activeGeneration;
+        }
+        if (!IsRunning(process))
+        {
+            OnProcessExited(process, generation);
+            return false;
+        }
+        if (!await ProbeAsync(baseUrl, cancellationToken).ConfigureAwait(false)) return false;
+        lock (StateSync)
+            return ReferenceEquals(_proc, process) && _activeGeneration == generation &&
+                   string.Equals(_baseUrl, baseUrl, StringComparison.OrdinalIgnoreCase) &&
+                   (scriptPath == null ||
+                    (string.Equals(_scriptPath, scriptPath, StringComparison.OrdinalIgnoreCase) &&
+                     string.Equals(_configPath, configPath, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    internal static bool MatchesCurrentSource(string scriptPath, string configPath)
+    {
+        try
+        {
+            scriptPath = Path.GetFullPath(scriptPath);
+            configPath = Path.GetFullPath(configPath);
+        }
+        catch { return false; }
+        lock (StateSync)
+            return string.Equals(_scriptPath, scriptPath, StringComparison.OrdinalIgnoreCase) &&
+                   string.Equals(_configPath, configPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    static async Task<bool> ProbeAsync(string baseUrl, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(baseUrl)) return false;
+        try
+        {
+            var request = Net.HttpUtil.Get(baseUrl.TrimEnd('/') + "/config", timeoutMs: 1500);
+            var rsp = await request.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return rsp.Code is >= 200 and < 300 && !string.IsNullOrWhiteSpace(rsp.Text());
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch { return false; }
+    }
+
+    static bool IsRunning(Process process)
+    {
+        try { return process != null && !process.HasExited; }
+        catch { return false; }
+    }
+
+    static void ObserveExit(Process process, long generation)
+    {
+        process.Exited += (_, _) => OnProcessExited(process, generation);
+        process.EnableRaisingEvents = true;
+    }
+
+    static void OnProcessExited(Process process, long generation)
+    {
+        int? exitCode = null;
+        try { exitCode = process.ExitCode; } catch { }
+        if (!ClearExitedProcess(process, generation)) return;
+
+        NodeConfigChangeMonitor.Stop();
+        LastError = "Node 源服务已意外退出" + (exitCode.HasValue ? $" (exit {exitCode.Value})" : "");
+        Logger.E(Tag, LastError);
+        try { process.Dispose(); } catch { }
+    }
+
+    static bool ClearExitedProcess(Process process, long generation)
+    {
+        if (process == null) return false;
+        lock (StateSync)
+        {
+            if (!ReferenceEquals(_proc, process) || _activeGeneration != generation) return false;
+            _proc = null;
+            _activeGeneration = 0;
+            _baseUrl = null;
+            return true;
+        }
+    }
+
     static void Pipe(Process owner, StreamReader reader, bool captureError)
     {
         _ = Task.Run(async () =>
@@ -281,7 +473,7 @@ public static class NodeRuntime
                     if (string.IsNullOrEmpty(compact)) continue;
                     if (captureError &&
                         (ReferenceEquals(_startingProc, owner) ||
-                         (_startingProc == null && ReferenceEquals(_proc, owner))))
+                         (_startingProc == null && IsActiveProcess(owner))))
                         _startupError = compact;
                     Logger.D(Tag, compact);
                     emitted++;
@@ -293,6 +485,11 @@ public static class NodeRuntime
                 if (omitted > 0) Logger.D(Tag, $"Node 日志过密，已省略 {omitted} 行");
             }
         });
+    }
+
+    static bool IsActiveProcess(Process process)
+    {
+        lock (StateSync) return ReferenceEquals(_proc, process);
     }
 
     static string CompactLog(string line)
@@ -368,14 +565,20 @@ public static class NodeRuntime
         Interlocked.Exchange(ref _shutdownRequested, 1);
         CancelStartup();
         var starting = Interlocked.Exchange(ref _startingProc, null);
-        var active = Interlocked.Exchange(ref _proc, null);
+        Process active;
+        lock (StateSync)
+        {
+            active = _proc;
+            _proc = null;
+            _activeGeneration = 0;
+            _scriptPath = null;
+            _configPath = null;
+            _sourceVersion = null;
+            _baseUrl = null;
+        }
         KillNow(starting);
         if (!ReferenceEquals(active, starting)) KillNow(active);
-        _scriptPath = null;
-        _configPath = null;
-        _sourceVersion = null;
         _startupError = null;
-        BaseUrl = null;
     }
 
     public static async Task ShutdownAsync()
@@ -386,13 +589,18 @@ public static class NodeRuntime
         await Lock.WaitAsync().ConfigureAwait(false);
         try
         {
-            var process = _proc;
-            _proc = null;
-            _scriptPath = null;
-            _configPath = null;
-            _sourceVersion = null;
+            Process process;
+            lock (StateSync)
+            {
+                process = _proc;
+                _proc = null;
+                _activeGeneration = 0;
+                _scriptPath = null;
+                _configPath = null;
+                _sourceVersion = null;
+                _baseUrl = null;
+            }
             _startupError = null;
-            BaseUrl = null;
             await StopProcessAsync(process).ConfigureAwait(false);
         }
         catch (Exception e) { Logger.E(Tag, "Node 源服务关闭失败: " + e.Message); }

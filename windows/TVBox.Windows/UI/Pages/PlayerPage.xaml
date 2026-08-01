@@ -2,7 +2,6 @@
     x:Class="TVBoxForWindows.UI.Pages.PlayerPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:controls="using:TVBoxForWindows.UI.Controls"
     xmlns:fl="using:FlyleafLib.Controls.WinUI"
     IsTabStop="True"
     Background="Transparent">
@@ -125,10 +124,8 @@
             <Grid x:Name="InteractLayer" Background="Transparent"
                   Tapped="OnPlayerTapped" DoubleTapped="OnPlayerDoubleTapped"/>
 
-            <!-- 加载层：海报铺底 + 深色遮罩 + 状态文字 -->
-            <Grid x:Name="LoadingOverlay" Visibility="Collapsed">
-                <controls:PosterImage x:Name="LoadingPoster" Opacity="0.3"/>
-                <Border Background="#A6000000"/>
+            <!-- 加载层使用不透明黑底，避免被覆盖的详情页透出。 -->
+            <Grid x:Name="LoadingOverlay" Background="#FF000000" Visibility="Collapsed">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
                     <ProgressRing IsActive="True" Width="56" Height="56"/>
                     <TextBlock x:Name="StatusText" Text="解析中…" FontSize="14" HorizontalAlignment="Center"
@@ -140,7 +137,7 @@
                                 Visibility="Collapsed">
                         <FontIcon Glyph="&#xE896;" FontSize="12"
                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        <TextBlock x:Name="LoadingSpeedText" Text="0 B/s" FontSize="13"
+                        <TextBlock x:Name="LoadingSpeedText" Text="正在连接…" FontSize="13"
                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                     </StackPanel>
                 </StackPanel>

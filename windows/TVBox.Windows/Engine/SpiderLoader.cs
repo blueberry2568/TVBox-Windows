@@ -15,8 +15,20 @@ public class SpiderLoader
     SpiderLoader() { }
 
     /// <summary>Node 源站点：api 指向当前已启动的 Node 服务基址（配置加载期重写为绝对地址）。</summary>
-    static bool IsNode(string api) =>
-        NodeRuntime.BaseUrl != null && api.StartsWith(NodeRuntime.BaseUrl, StringComparison.OrdinalIgnoreCase);
+    static bool IsNode(string api)
+    {
+        var baseUrl = NodeRuntime.BaseUrl;
+        if (!string.IsNullOrWhiteSpace(baseUrl) &&
+            api.StartsWith(baseUrl, StringComparison.OrdinalIgnoreCase)) return true;
+
+        // A natural Node exit clears BaseUrl before the next page request. Keep the
+        // already-flattened loopback spider recognizable so NodeSpider can restore it.
+        var source = VodConfigService.Instance.Config?.Url;
+        if (string.IsNullOrWhiteSpace(source)) source = Setting.ConfigVod;
+        return NodeSource.MaybeNode(UrlUtil.Convert(source ?? "")) &&
+               Uri.TryCreate(api, UriKind.Absolute, out var uri) && uri.IsLoopback &&
+               uri.AbsolutePath.StartsWith("/spider/", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>.js 判定：api 以 .js 结尾、或含 .js?（带查询串），或 ext 指向 .js 脚本。</summary>
     static bool IsJs(string api, string ext) =>
@@ -27,10 +39,11 @@ public class SpiderLoader
     /// <summary>取点播站点爬虫（type=3）：node → NodeSpider；.js → JsSpider；其余 → SpiderNull。</summary>
     public Task<Spider> GetSpider(Models.Site site)
     {
+        var key = site?.Key ?? "";
         var api = site?.Api ?? "";
         var ext = site?.Ext ?? "";
-        if (IsNode(api)) return GetOrCreate(site.Key, () => CreateNode(site));
-        if (IsJs(api, ext)) return GetOrCreate(site.Key, () => CreateJs(site, ext));
+        if (IsNode(api)) return GetOrCreate(key, () => CreateNode(site));
+        if (IsJs(api, ext)) return GetOrCreate(key, () => CreateJs(site, ext));
         return Task.FromResult<Spider>(new SpiderNull { Site = site });
     }
 

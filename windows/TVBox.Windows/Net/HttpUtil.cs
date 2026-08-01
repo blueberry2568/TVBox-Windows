@@ -28,24 +28,25 @@ public static class HttpUtil
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
     }
 
-    public static HttpClient Client(string proxyUrl = null, bool redirect = true)
+    public static HttpClient Client(string proxyUrl = null, bool redirect = true, bool bypassProxy = false)
     {
-        var key = (proxyUrl ?? "") + "|" + redirect;
-        return Clients.GetOrAdd(key, _ => Create(proxyUrl, redirect));
+        var key = (proxyUrl ?? "") + "|" + redirect + "|" + bypassProxy;
+        return Clients.GetOrAdd(key, _ => Create(proxyUrl, redirect, bypassProxy));
     }
 
-    static HttpClient Create(string proxyUrl, bool redirect)
+    static HttpClient Create(string proxyUrl, bool redirect, bool bypassProxy)
     {
         var handler = new SocketsHttpHandler
         {
             AllowAutoRedirect = redirect,
             AutomaticDecompression = DecompressionMethods.All,
             UseCookies = false,
+            UseProxy = !bypassProxy,
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
             SslOptions = { RemoteCertificateValidationCallback = (_, _, _, _) => true },
             ConnectCallback = ConnectAsync,
         };
-        if (!string.IsNullOrEmpty(proxyUrl))
+        if (!bypassProxy && !string.IsNullOrEmpty(proxyUrl))
         {
             try
             {
@@ -69,6 +70,23 @@ public static class HttpUtil
     {
         var host = ctx.DnsEndPoint.Host;
         var port = ctx.DnsEndPoint.Port;
+        if (IsLoopbackHost(host))
+        {
+            var endpoint = IPAddress.TryParse(host.Trim('[', ']'), out var loopback)
+                ? loopback
+                : IPAddress.Loopback;
+            var loopbackSocket = new Socket(endpoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            try
+            {
+                await loopbackSocket.ConnectAsync(endpoint, port, ct);
+                return new NetworkStream(loopbackSocket, true);
+            }
+            catch
+            {
+                loopbackSocket.Dispose();
+                throw;
+            }
+        }
         var rewrite = NetworkConfig.RewriteHost(host);
         if (rewrite != null) host = rewrite;
         var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
@@ -98,11 +116,14 @@ public static class HttpUtil
     {
         url = AppendQuery(url, query);
         var host = Core.UrlUtil.Host(url);
-        if (NetworkConfig.IsAd(host, url)) throw new IOException("Ad blocked: " + host);
-        var client = Client(NetworkConfig.GetProxyFor(host), redirect);
+        var isLoopback = IsLoopbackUrl(url);
+        if (!isLoopback && NetworkConfig.IsAd(host, url)) throw new IOException("Ad blocked: " + host);
+        var client = isLoopback
+            ? Client(redirect: redirect, bypassProxy: true)
+            : Client(NetworkConfig.GetProxyFor(host), redirect);
         using var req = new HttpRequestMessage(new HttpMethod(method.ToUpperInvariant()), url);
         var effectiveHeaders = new Dictionary<string, string>(headers ?? new(), StringComparer.OrdinalIgnoreCase);
-        var inject = NetworkConfig.GetInjectHeaders(host);
+        var inject = isLoopback ? null : NetworkConfig.GetInjectHeaders(host);
         if (inject != null)
             foreach (var kv in inject) effectiveHeaders[kv.Key] = kv.Value;
         bool hasUa = false;
@@ -126,6 +147,17 @@ public static class HttpUtil
         foreach (var h in res.Content.Headers) ok.Headers[h.Key] = h.Value.ToList();
         ok.Body = await res.Content.ReadAsByteArrayAsync(cts.Token);
         return ok;
+    }
+
+    static bool IsLoopbackUrl(string url)
+        => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.IsLoopback;
+
+    static bool IsLoopbackHost(string host)
+    {
+        if (string.IsNullOrWhiteSpace(host)) return false;
+        var normalized = host.Trim().Trim('[', ']').TrimEnd('.');
+        if (normalized.Equals("localhost", StringComparison.OrdinalIgnoreCase)) return true;
+        return IPAddress.TryParse(normalized, out var address) && IPAddress.IsLoopback(address);
     }
 
     public static string AppendQuery(string url, Dictionary<string, string> query)

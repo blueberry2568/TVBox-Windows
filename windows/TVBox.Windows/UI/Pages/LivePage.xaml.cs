@@ -46,6 +46,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
     bool _catalogLoading;
     bool _playbackLoading;
     bool _showPlaybackSpeed;
+    bool _playbackTransferRateKnown;
     CompositionRoundedRectangleGeometry _playerAreaClipGeometry;
     CompositionGeometricClip _playerAreaClip;
     readonly Microsoft.UI.Xaml.Media.SolidColorBrush _compactCornerMaskBrush =
@@ -59,6 +60,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
     double _bottomBarWidth;
     long _displayPositionMs;
     long _displayDurationMs;
+    long? _pendingSeekMs;
+    long _pendingSeekRequestId;
     readonly Thickness _normalPagePadding;
     readonly Thickness _normalContentMargin;
 
@@ -133,6 +136,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
         _catalogLoading = false;
         _playbackLoading = false;
         _showPlaybackSpeed = false;
+        _pendingSeekMs = null;
+        _pendingSeekRequestId = 0;
         UpdateLoadingIndicator();
         _navigationGeneration++;
         LiveConfigService.Instance.Loaded -= OnConfigLoaded;
@@ -165,6 +170,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
             _core.TimeChanged -= OnCoreTime;
             _core.TransferRateChanged -= OnCoreTransferRateChanged;
             _core.BufferingChanged -= OnCoreBufferingChanged;
+            _core.SeekFinished -= OnCoreSeekFinished;
             try { _core.Stop(); _core.Dispose(); } catch { }
         }
         _core = null;
@@ -195,6 +201,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
             _core.TimeChanged += OnCoreTime;
             _core.TransferRateChanged += OnCoreTransferRateChanged;
             _core.BufferingChanged += OnCoreBufferingChanged;
+            _core.SeekFinished += OnCoreSeekFinished;
         }
         catch (Exception ex)
         {
@@ -213,7 +220,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
                 Logger.D("LivePage", "已忽略新频道解析期间旧媒体的打开事件");
                 return;
             }
-            SetPlaybackLoading(false);
+            var buffering = _core?.IsBuffering == true;
+            SetPlaybackLoading(buffering, buffering);
             SetSourceTransition(false);
             if (_pauseWhenOpened && _core?.IsPlaying == true) _core.PlayPause();
             _hostBinding?.RequestSynchronize();
@@ -233,6 +241,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
             }
             SetPlaybackLoading(false);
             LiveBufferBar.IsIndeterminate = false;
+            _pendingSeekMs = null;
+            _pendingSeekRequestId = 0;
             SetSourceTransition(false);
             UpdateLivePlayPauseIcon();
             ShowInfo("播放错误：" + message, InfoBarSeverity.Error);
@@ -242,6 +252,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
     void OnCoreTransferRateChanged(double bytesPerSecond)
     {
         if (!_isNavigatedActive || LiveLoadingSpeedPanel.Visibility != Visibility.Visible) return;
+        if (bytesPerSecond <= 0 && !_playbackTransferRateKnown) return;
+        if (bytesPerSecond > 0) _playbackTransferRateKnown = true;
         LiveLoadingSpeedText.Text = PlayerCore.FormatTransferRate(bytesPerSecond);
     }
 
@@ -265,7 +277,12 @@ public sealed partial class LivePage : Page, INavigationPlayback
         var resetSpeed = loading && showSpeed && (!_playbackLoading || !_showPlaybackSpeed);
         _playbackLoading = loading;
         _showPlaybackSpeed = loading && showSpeed;
-        if (resetSpeed) LiveLoadingSpeedText.Text = PlayerCore.FormatTransferRate(0);
+        if (resetSpeed)
+        {
+            _playbackTransferRateKnown = false;
+            LiveLoadingSpeedText.Text = PlayerCore.FormatTransferRate(-1);
+        }
+        if (!loading) _playbackTransferRateKnown = false;
         UpdateLoadingIndicator();
     }
 
@@ -274,6 +291,9 @@ public sealed partial class LivePage : Page, INavigationPlayback
         var active = _catalogLoading || _playbackLoading;
         LoadingRing.IsActive = active;
         LoadingRing.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+        LivePlaybackLoadingBackdrop.Visibility = _playbackLoading
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         LiveLoadingSpeedPanel.Visibility = _playbackLoading && _showPlaybackSpeed
             ? Visibility.Visible
             : Visibility.Collapsed;
@@ -283,7 +303,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
     {
         if (!_isNavigatedActive || _core == null) return;
         var durationMs = _core.DurationMs;
-        _displayPositionMs = Math.Max(0, positionMs);
+        var displayPositionMs = _pendingSeekMs ?? positionMs;
+        _displayPositionMs = Math.Max(0, displayPositionMs);
         _displayDurationMs = Math.Max(0, durationMs);
         long bufferedMs = 0;
         try { bufferedMs = _core.Fly.BufferedDuration / 10000; } catch { }
@@ -294,7 +315,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
             LiveProgressRow.Visibility = Visibility.Visible;
             LiveSeekSlider.IsHitTestVisible = true;
             LiveSeekSlider.Maximum = durationMs;
-            LiveSeekSlider.Value = Math.Min(positionMs, durationMs);
+            LiveSeekSlider.Value = Math.Min(displayPositionMs, durationMs);
             LiveBufferBar.IsIndeterminate = false;
             LiveBufferBar.Maximum = durationMs;
             LiveBufferBar.Value = Math.Min(positionMs + bufferedMs, durationMs);
@@ -310,6 +331,15 @@ public sealed partial class LivePage : Page, INavigationPlayback
         _updatingSeek = false;
         UpdateLiveTimeLabel();
         UpdateLivePlayPauseIcon();
+    }
+
+    void OnCoreSeekFinished(long requestId, long targetMs, bool success)
+    {
+        if (!_isNavigatedActive || requestId != _pendingSeekRequestId ||
+            _pendingSeekMs is not long pending || pending != targetMs) return;
+        _pendingSeekMs = null;
+        _pendingSeekRequestId = 0;
+        if (!success) ShowInfo("定位失败，请重试", InfoBarSeverity.Warning);
     }
 
     public void PauseForNavigation()
@@ -833,6 +863,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
             // Cancel both resolver work and a Flyleaf open that may already have
             // started for the previous channel before resolving the new address.
             _core.Stop();
+            _pendingSeekMs = null;
+            _pendingSeekRequestId = 0;
             SetSourceTransition(true);
             _currentItem = item;
             _current = item.Channel;
@@ -1003,8 +1035,14 @@ public sealed partial class LivePage : Page, INavigationPlayback
     void OnLiveSeekChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
     {
         if (_updatingSeek || _core == null || _core.DurationMs <= 0) return;
-        if (Math.Abs(e.NewValue - _core.PositionMs) < 800) return;
-        _core.SeekMs((long)e.NewValue);
+        var target = (long)Math.Clamp(e.NewValue, 0, _core.DurationMs);
+        if (_pendingSeekMs == null && Math.Abs(target - _core.PositionMs) < 800) return;
+        var requestId = _core.SeekMs(target);
+        if (requestId <= 0) return;
+        _pendingSeekMs = target;
+        _pendingSeekRequestId = requestId;
+        _displayPositionMs = target;
+        UpdateLiveTimeLabel();
     }
 
     void OnBottomBarSizeChanged(object sender, SizeChangedEventArgs e)

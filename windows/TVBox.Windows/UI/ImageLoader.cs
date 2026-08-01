@@ -79,7 +79,7 @@ public static class ImageLoader
         var suffix = marker < 0 ? "" : value[marker..];
         if (!Uri.TryCreate(NodeRuntime.BaseUrl, UriKind.Absolute, out var local) ||
             !Uri.TryCreate(raw, UriKind.Absolute, out var source) ||
-            source.Port != local.Port ||
+            !source.IsLoopback ||
             (!source.AbsolutePath.StartsWith("/spider/", StringComparison.OrdinalIgnoreCase) &&
              !source.AbsolutePath.StartsWith("/website", StringComparison.OrdinalIgnoreCase))) return value;
         return NodeRuntime.BaseUrl.TrimEnd('/') + source.PathAndQuery + suffix;

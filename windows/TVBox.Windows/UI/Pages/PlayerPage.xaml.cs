@@ -24,7 +24,6 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     const string TAG = "PlayerPage";
     const long SeekStepMs = 10000;                 // ←→ 步长
     const int SeekDebounceMs = 110;
-    const int SeekFallbackMs = 750;
     const string ChevronDown = "\uE70D";
     const string ChevronUp = "\uE70E";
     static readonly string[] ScaleNames = { "原始", "拉伸", "16:9", "4:3", "填充" };
@@ -53,6 +52,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     bool _closed;                                  // 已离开页面，晚到事件全部忽略
     bool _pauseWhenOpened;                         // 隐藏期间晚到的解析结果起播后立即暂停
     bool _isBuffering;
+    bool _bufferingCompletionDeferred;
+    bool _loadingTransferRateKnown;
     int _menuOpen;                                 // 打开中的 Flyout 数（暂停自动隐藏）
     int _playGeneration;                           // 只允许最新一次解析结果提交给播放器
     bool _sourceTransitionInProgress;              // 防止 Flyleaf OpenAsync 重叠换源
@@ -66,9 +67,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         new(Microsoft.UI.Colors.Black);
     long _lastSaveTick;                            // 上次历史落盘（墙钟）
     long? _pendingSeekMs;
-    long _seekIssuedTick;
-    long _seekOriginMs;
-    int _seekDirection;
+    long _pendingSeekRequestId;
     long _subtitleLoadGeneration;
     long _subtitleOpenRequestId;
     string _subtitleOpenLabel;
@@ -107,7 +106,6 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         }
         _closed = false;
         TitleText.Text = _session.Vod?.CleanName ?? "";
-        LoadingPoster.Source = _session.Vod?.Pic ?? "";
         RestoreFromHistory();
         InitTimers();
         InitPlayer();
@@ -158,6 +156,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             _core.TimeChanged -= OnCoreTime;
             _core.TransferRateChanged -= OnCoreTransferRateChanged;
             _core.BufferingChanged -= OnCoreBufferingChanged;
+            _core.SeekFinished -= OnCoreSeekFinished;
             _core.SubtitleOpened -= OnSubtitleOpened;
             try { _core.Stop(); _core.Dispose(); } catch { }
             _core = null;
@@ -213,6 +212,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             _core.TimeChanged += OnCoreTime;
             _core.TransferRateChanged += OnCoreTransferRateChanged;
             _core.BufferingChanged += OnCoreBufferingChanged;
+            _core.SeekFinished += OnCoreSeekFinished;
             _core.SubtitleOpened += OnSubtitleOpened;
         }
         catch (Exception ex)
@@ -323,8 +323,9 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnCoreOpened()
     {
         if (_closed) return;
-        _isBuffering = false;
-        HideLoading();
+        _isBuffering = _core?.IsBuffering == true;
+        if (_isBuffering) ShowLoading("缓冲中…", true);
+        else HideLoading();
         _triedFlags.Clear();
         SetSourceTransition(false);
         try { _core.Speed = _speed; _core.Scale = _scale; } catch { }
@@ -347,15 +348,42 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnCoreTransferRateChanged(double bytesPerSecond)
     {
         if (_closed || LoadingSpeedPanel.Visibility != Visibility.Visible) return;
+        if (bytesPerSecond <= 0 && !_loadingTransferRateKnown) return;
+        if (bytesPerSecond > 0) _loadingTransferRateKnown = true;
         LoadingSpeedText.Text = PlayerCore.FormatTransferRate(bytesPerSecond);
     }
 
     void OnCoreBufferingChanged(bool buffering)
     {
         if (_closed || _sourceTransitionInProgress) return;
+        if (!buffering && _pendingSeekMs != null)
+        {
+            // A queued target can arrive while the previous seek is completing.
+            // Keep the loading state until PlayerCore confirms the final coalesced target.
+            _bufferingCompletionDeferred = true;
+            return;
+        }
+
+        _bufferingCompletionDeferred = false;
         _isBuffering = buffering;
         if (buffering) ShowLoading("缓冲中…", true);
         else HideLoading();
+    }
+
+    void OnCoreSeekFinished(long requestId, long targetMs, bool success)
+    {
+        if (_closed || requestId != _pendingSeekRequestId ||
+            _pendingSeekMs is not long pending || pending != targetMs) return;
+        _pendingSeekMs = null;
+        _pendingSeekRequestId = 0;
+        _seekTimer?.Stop();
+        if (_bufferingCompletionDeferred)
+        {
+            _bufferingCompletionDeferred = false;
+            _isBuffering = false;
+            HideLoading();
+        }
+        if (!success) ShowToast("定位失败，请重试");
     }
 
     /// <summary>自然播完：自动下一集；没有下一集则返回。</summary>
@@ -363,6 +391,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     {
         if (_closed) return;
         if (_sourceTransitionInProgress && _cts != null) return;
+        CancelPendingSeek();
         var eps = _session.CurrentFlag?.Episodes;
         if (eps != null && _session.EpisodeIndex + 1 < eps.Count)
         {
@@ -380,6 +409,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnPlayError(string msg)
     {
         _isBuffering = false;
+        CancelPendingSeek();
         HideLoading();
         Logger.E(TAG, "播放失败: " + msg);
         var retryKey = _session.FlagIndex + ":" + _session.EpisodeIndex;
@@ -439,21 +469,11 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnCoreTime(long ms)
     {
         if (_closed || _core == null) return;
-        if (!_isBuffering && !_sourceTransitionInProgress && LoadingOverlay.Visibility == Visibility.Visible)
+        if (!_isBuffering && _pendingSeekMs == null && !_sourceTransitionInProgress &&
+            LoadingOverlay.Visibility == Visibility.Visible)
             HideLoading();
         long dur = _core.DurationMs;
-        long displayMs = ms;
-        if (_pendingSeekMs is long pending)
-        {
-            if (IsSeekUpdateValid(ms, pending))
-            {
-                _pendingSeekMs = null;
-                _seekIssuedTick = 0;
-                _seekOriginMs = 0;
-                _seekDirection = 0;
-            }
-            else displayMs = pending;
-        }
+        long displayMs = _pendingSeekMs ?? ms;
         _updatingSlider = true;
         if (dur > 0)
         {
@@ -479,7 +499,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         }
         // 片尾自动下一集（跳片头尾开关开启且本片设置了 ending）
         var h = _session.History;
-        if (h != null && h.Ending > 0 && dur > 0 && Setting.GetBool("skip_start_end"))
+        if (_pendingSeekMs == null && !_isBuffering && h != null && h.Ending > 0 && dur > 0 &&
+            Setting.GetBool("skip_start_end"))
         {
             if (!_endingFired && ms >= dur - h.Ending)
             {
@@ -1558,7 +1579,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     void SeekRelative(long delta)
     {
-        if (_core == null) return;
+        if (_core == null || _sourceTransitionInProgress) return;
         long dur = _core.DurationMs;
         long origin = _pendingSeekMs ?? _core.PositionMs;
         long target = Math.Max(0, origin + delta);
@@ -1568,14 +1589,12 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     void QueueSeek(long target)
     {
-        if (_core == null) return;
+        if (_core == null || _sourceTransitionInProgress) return;
         long dur = _core.DurationMs;
         target = Math.Max(0, target);
         if (dur > 0) target = Math.Min(target, dur);
         _pendingSeekMs = target;
-        _seekIssuedTick = 0;
-        _seekOriginMs = 0;
-        _seekDirection = 0;
+        _pendingSeekRequestId = 0;
 
         _updatingSlider = true;
         if (dur > 0)
@@ -1597,43 +1616,36 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void CommitPendingSeek()
     {
         _seekTimer?.Stop();
-        if (_closed || _core == null || _pendingSeekMs is not long target)
+        if (_closed || _sourceTransitionInProgress || _core == null || _pendingSeekMs is not long target)
         {
             _pendingSeekMs = null;
-            _seekIssuedTick = 0;
-            _seekOriginMs = 0;
-            _seekDirection = 0;
+            _pendingSeekRequestId = 0;
+            _bufferingCompletionDeferred = false;
             return;
         }
-        _seekOriginMs = _core.PositionMs;
-        _seekDirection = Math.Sign(target - _seekOriginMs);
-        _seekIssuedTick = Environment.TickCount64;
-        _core.SeekMs(target);
-    }
-
-    bool IsSeekUpdateValid(long position, long target)
-    {
-        if (_seekIssuedTick <= 0) return false;
-        if (Math.Abs(position - target) <= 1500) return true;
-
-        var distance = Math.Abs(target - _seekOriginMs);
-        var moved = position - _seekOriginMs;
-        var transition = Math.Min(1000L, Math.Max(500L, distance / 4));
-        var movedInRequestedDirection = _seekDirection == 0 || Math.Sign(moved) == _seekDirection;
-        if (movedInRequestedDirection && Math.Abs(moved) >= transition) return true;
-
-        // A failed backend seek must not pin the UI indefinitely. Normal 250 ms
-        // playback ticks are rejected above; this is only a short recovery guard.
-        return Environment.TickCount64 - _seekIssuedTick >= SeekFallbackMs;
+        var requestId = _core.SeekMs(target);
+        if (requestId <= 0 && _pendingSeekMs == target)
+        {
+            var hideDeferredLoading = _bufferingCompletionDeferred;
+            _pendingSeekMs = null;
+            _pendingSeekRequestId = 0;
+            _bufferingCompletionDeferred = false;
+            if (hideDeferredLoading)
+            {
+                _isBuffering = false;
+                HideLoading();
+            }
+            ShowToast("播放器尚未就绪");
+        }
+        else if (_pendingSeekMs == target) _pendingSeekRequestId = requestId;
     }
 
     void CancelPendingSeek()
     {
         _seekTimer?.Stop();
         _pendingSeekMs = null;
-        _seekIssuedTick = 0;
-        _seekOriginMs = 0;
-        _seekDirection = 0;
+        _pendingSeekRequestId = 0;
+        _bufferingCompletionDeferred = false;
     }
 
     void DisposeSeekTimer()
@@ -1692,12 +1704,17 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     {
         StatusText.Text = status ?? "";
         LoadingSpeedPanel.Visibility = showSpeed ? Visibility.Visible : Visibility.Collapsed;
-        if (showSpeed) LoadingSpeedText.Text = PlayerCore.FormatTransferRate(0);
+        if (showSpeed)
+        {
+            _loadingTransferRateKnown = false;
+            LoadingSpeedText.Text = PlayerCore.FormatTransferRate(-1);
+        }
         LoadingOverlay.Visibility = Visibility.Visible;
     }
 
     void HideLoading()
     {
+        _loadingTransferRateKnown = false;
         LoadingSpeedPanel.Visibility = Visibility.Collapsed;
         LoadingOverlay.Visibility = Visibility.Collapsed;
     }

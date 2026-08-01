@@ -57,6 +57,38 @@ public class VodConfigService
     /// <summary>Reloads only while the expected source is still current.</summary>
     internal Task<bool> ReloadCurrentAsync(string expectedUrl) => LoadCoreAsync(null, expectedUrl, false);
 
+    /// <summary>
+    /// Restarts the selected CatPawOpen service without rebuilding or publishing the
+    /// active VOD configuration. Existing page state stays intact while stale localhost
+    /// API URLs are rebased by their NodeSpider on the next request.
+    /// </summary>
+    internal async Task<string> RestoreCurrentNodeAsync(CancellationToken cancellationToken = default)
+    {
+        await _loadLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var url = Config?.Url;
+            if (string.IsNullOrWhiteSpace(url)) url = Setting.ConfigVod;
+            if (string.IsNullOrWhiteSpace(url)) url = Stores.ResolveConfig(Setting.ConfigVod, 0)?.Url;
+            if (string.IsNullOrWhiteSpace(url)) return null;
+
+            var converted = UrlUtil.Convert(url.Trim());
+            if (!NodeSource.MaybeNode(converted)) return null;
+
+            if (await NodeSource.IsCurrentRuntimeHealthyAsync(converted, cancellationToken).ConfigureAwait(false))
+                return NodeRuntime.BaseUrl;
+
+            var flat = await NodeSource.TryLoadCachedAsync(converted).ConfigureAwait(false);
+            flat ??= await NodeSource.TryLoadAsync(converted).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(flat) ||
+                !await NodeSource.IsCurrentRuntimeHealthyAsync(converted, cancellationToken).ConfigureAwait(false))
+                return null;
+
+            return NodeRuntime.BaseUrl;
+        }
+        finally { _loadLock.Release(); }
+    }
+
     async Task<bool> LoadCoreAsync(ConfigRecord requested, string expectedUrl, bool preferCache)
     {
         await _loadLock.WaitAsync();

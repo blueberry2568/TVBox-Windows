@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json.Nodes;
 using TVBoxForWindows.Core;
@@ -55,10 +56,24 @@ public class NodeSpider : Spider
 
     public override async Task<object[]> ProxyLocal(Dictionary<string, string> query)
     {
-        var url = Net.HttpUtil.AppendQuery(Url("proxy"), query ?? new());
-        var rsp = await Net.HttpUtil.Get(url, timeoutMs: 30000);
-        var mime = rsp.Headers.TryGetValue("Content-Type", out var ct) && ct.Count > 0 ? ct[0] : "application/octet-stream";
-        return new object[] { rsp.Code == 0 ? 200 : rsp.Code, mime, rsp.Body };
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            try
+            {
+                await EnsureInitialized();
+                var url = Net.HttpUtil.AppendQuery(Url("proxy"), query ?? new());
+                var rsp = await Net.HttpUtil.Get(url, timeoutMs: 30000);
+                var mime = rsp.Headers.TryGetValue("Content-Type", out var ct) && ct.Count > 0
+                    ? ct[0]
+                    : "application/octet-stream";
+                return new object[] { rsp.Code == 0 ? 200 : rsp.Code, mime, rsp.Body };
+            }
+            catch (Exception error) when (attempt == 0 && IsLoopbackTransportFailure(error))
+            {
+                if (!await TryRecoverNodeAsync()) throw;
+            }
+        }
+        throw new Exception("Node 源代理请求失败");
     }
 
     string Url(string route) => (Api ?? "").TrimEnd('/') + "/" + route;
@@ -69,12 +84,12 @@ public class NodeSpider : Spider
     async Task<Net.OkResponse> Request(string route, object body)
     {
         if (string.IsNullOrEmpty(Api)) throw new Exception("NodeSpider 未设置 Api");
-        await EnsureInitialized();
         Exception failure = null;
         for (var attempt = 0; attempt < 2; attempt++)
         {
             try
             {
+                await EnsureInitialized();
                 var rsp = await Send(route, body);
                 if (!Transient(rsp) || attempt > 0) return rsp;
             }
@@ -82,6 +97,7 @@ public class NodeSpider : Spider
             {
                 failure = e;
                 if (attempt > 0) throw;
+                if (IsLoopbackTransportFailure(e) && !await TryRecoverNodeAsync()) throw;
             }
             await Task.Delay(300);
         }
@@ -121,6 +137,64 @@ public class NodeSpider : Spider
         var payload = Encoding.UTF8.GetBytes(JsonUtil.Serialize(body));
         var timeout = Math.Max(5000, Site?.RequestTimeout ?? 15000);
         return Net.HttpUtil.Execute("POST", Url(route), null, null, payload, "application/json", timeoutMs: timeout);
+    }
+
+    async Task<bool> TryRecoverNodeAsync()
+    {
+        string oldApi;
+        lock (_initSync) oldApi = Api;
+        if (!Uri.TryCreate(oldApi, UriKind.Absolute, out var oldUri) || !oldUri.IsLoopback) return false;
+
+        string baseUrl;
+        try
+        {
+            baseUrl = await VodConfigService.Instance.RestoreCurrentNodeAsync();
+        }
+        catch (Exception error)
+        {
+            Logger.E("NodeSpider", "恢复点播 Node 服务失败: " + error.Message);
+            return false;
+        }
+        if (!Uri.TryCreate(baseUrl, UriKind.Absolute, out var baseUri)) return false;
+
+        var rebased = new UriBuilder(baseUri)
+        {
+            Path = oldUri.AbsolutePath,
+            Query = oldUri.Query.TrimStart('?'),
+        }.Uri.AbsoluteUri.TrimEnd('/');
+        lock (_initSync)
+        {
+            Api = rebased;
+            _initTask = null;
+        }
+        Logger.D("NodeSpider", $"Node 服务已恢复，站点请求重定向到 {baseUri.Authority}");
+        return true;
+    }
+
+    bool IsLoopbackTransportFailure(Exception error)
+    {
+        if (error == null || !Uri.TryCreate(Api, UriKind.Absolute, out var api) || !api.IsLoopback)
+            return false;
+        var pending = new Stack<Exception>();
+        pending.Push(error);
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            if (current is SocketException socket && socket.SocketErrorCode is
+                SocketError.ConnectionRefused or
+                SocketError.ConnectionReset or
+                SocketError.ConnectionAborted or
+                SocketError.NetworkReset)
+                return true;
+            if (current is HttpRequestException http &&
+                http.HttpRequestError == HttpRequestError.ConnectionError)
+                return true;
+            if (current is AggregateException aggregate)
+                foreach (var inner in aggregate.InnerExceptions) pending.Push(inner);
+            else if (current.InnerException != null)
+                pending.Push(current.InnerException);
+        }
+        return false;
     }
 
     static string Read(Net.OkResponse rsp, string route)
