@@ -43,6 +43,9 @@ public sealed partial class LivePage : Page, INavigationPlayback
     bool _pauseWhenOpened;
     bool _isNavigatedActive;
     bool _sourceTransitionInProgress;
+    bool _catalogLoading;
+    bool _playbackLoading;
+    bool _showPlaybackSpeed;
     CompositionRoundedRectangleGeometry _playerAreaClipGeometry;
     CompositionGeometricClip _playerAreaClip;
     readonly Microsoft.UI.Xaml.Media.SolidColorBrush _compactCornerMaskBrush =
@@ -100,6 +103,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
         // live installation, otherwise the source guide flashes over valid content.
         await App.Main.InitialVodRestoreTask;
         if (!_isNavigatedActive || navigationGeneration != _navigationGeneration) return;
+        await App.Main.InitialLiveRestoreTask;
+        if (!_isNavigatedActive || navigationGeneration != _navigationGeneration) return;
 
         LiveConfigService.Instance.Loaded += OnConfigLoaded;
         if (LiveConfigService.Instance.Lives.Count > 0)
@@ -116,7 +121,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
         {
             if (!string.Equals(Setting.ConfigLive, address, StringComparison.OrdinalIgnoreCase))
                 Setting.ConfigLive = address;
-            await LoadGuideAddress(address, false);
+            await LoadGuideAddress(address, false, true);
         }
         else GuidePanel.Visibility = Visibility.Visible;
     }
@@ -125,6 +130,10 @@ public sealed partial class LivePage : Page, INavigationPlayback
     {
         base.OnNavigatedFrom(e);
         _isNavigatedActive = false;
+        _catalogLoading = false;
+        _playbackLoading = false;
+        _showPlaybackSpeed = false;
+        UpdateLoadingIndicator();
         _navigationGeneration++;
         LiveConfigService.Instance.Loaded -= OnConfigLoaded;
         _linePanelMutationVersion++;
@@ -154,6 +163,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
             _core.Opened -= OnCoreOpened;
             _core.Errored -= OnCoreErrored;
             _core.TimeChanged -= OnCoreTime;
+            _core.TransferRateChanged -= OnCoreTransferRateChanged;
+            _core.BufferingChanged -= OnCoreBufferingChanged;
             try { _core.Stop(); _core.Dispose(); } catch { }
         }
         _core = null;
@@ -182,6 +193,8 @@ public sealed partial class LivePage : Page, INavigationPlayback
             _core.Opened += OnCoreOpened;
             _core.Errored += OnCoreErrored;
             _core.TimeChanged += OnCoreTime;
+            _core.TransferRateChanged += OnCoreTransferRateChanged;
+            _core.BufferingChanged += OnCoreBufferingChanged;
         }
         catch (Exception ex)
         {
@@ -200,7 +213,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
                 Logger.D("LivePage", "已忽略新频道解析期间旧媒体的打开事件");
                 return;
             }
-            LoadingRing.IsActive = false;
+            SetPlaybackLoading(false);
             SetSourceTransition(false);
             if (_pauseWhenOpened && _core?.IsPlaying == true) _core.PlayPause();
             _hostBinding?.RequestSynchronize();
@@ -218,12 +231,52 @@ public sealed partial class LivePage : Page, INavigationPlayback
                 Logger.D("LivePage", "已忽略新频道解析期间旧媒体的错误: " + message);
                 return;
             }
-            LoadingRing.IsActive = false;
+            SetPlaybackLoading(false);
             LiveBufferBar.IsIndeterminate = false;
             SetSourceTransition(false);
             UpdateLivePlayPauseIcon();
             ShowInfo("播放错误：" + message, InfoBarSeverity.Error);
         });
+    }
+
+    void OnCoreTransferRateChanged(double bytesPerSecond)
+    {
+        if (!_isNavigatedActive || LiveLoadingSpeedPanel.Visibility != Visibility.Visible) return;
+        LiveLoadingSpeedText.Text = PlayerCore.FormatTransferRate(bytesPerSecond);
+    }
+
+    void OnCoreBufferingChanged(bool buffering)
+    {
+        App.Post(() =>
+        {
+            if (!_isNavigatedActive || _sourceTransitionInProgress) return;
+            SetPlaybackLoading(buffering, buffering);
+        });
+    }
+
+    void SetCatalogLoading(bool loading)
+    {
+        _catalogLoading = loading;
+        UpdateLoadingIndicator();
+    }
+
+    void SetPlaybackLoading(bool loading, bool showSpeed = false)
+    {
+        var resetSpeed = loading && showSpeed && (!_playbackLoading || !_showPlaybackSpeed);
+        _playbackLoading = loading;
+        _showPlaybackSpeed = loading && showSpeed;
+        if (resetSpeed) LiveLoadingSpeedText.Text = PlayerCore.FormatTransferRate(0);
+        UpdateLoadingIndicator();
+    }
+
+    void UpdateLoadingIndicator()
+    {
+        var active = _catalogLoading || _playbackLoading;
+        LoadingRing.IsActive = active;
+        LoadingRing.Visibility = active ? Visibility.Visible : Visibility.Collapsed;
+        LiveLoadingSpeedPanel.Visibility = _playbackLoading && _showPlaybackSpeed
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     void OnCoreTime(long positionMs)
@@ -335,10 +388,10 @@ public sealed partial class LivePage : Page, INavigationPlayback
 
     async void OnGuideLoad(object sender, RoutedEventArgs e)
     {
-        await LoadGuideAddress(GuideUrlBox.Text?.Trim(), true);
+        await LoadGuideAddress(GuideUrlBox.Text?.Trim(), true, false);
     }
 
-    async Task LoadGuideAddress(string address, bool showSuccess)
+    async Task LoadGuideAddress(string address, bool showSuccess, bool preferCache)
     {
         if (string.IsNullOrWhiteSpace(address))
         {
@@ -356,7 +409,9 @@ public sealed partial class LivePage : Page, INavigationPlayback
         GuideLoadButton.IsEnabled = false;
         try
         {
-            await LiveConfigService.Instance.LoadAsync(Stores.FindConfig(address, 1));
+            var config = Stores.FindConfig(address, 1);
+            if (preferCache) await LiveConfigService.Instance.LoadStartupAsync(config);
+            else await LiveConfigService.Instance.LoadAsync(config);
             if (showSuccess) ShowInfo("直播配置加载成功", InfoBarSeverity.Success);
         }
         catch (Exception ex)
@@ -376,7 +431,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
         var lives = LiveConfigService.Instance.Lives;
         if (lives.Count == 0)
         {
-            LoadingRing.IsActive = false;
+            SetCatalogLoading(false);
             _live = null;
             _current = null;
             _currentItem = null;
@@ -411,7 +466,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
         InvalidateLiveLoad();
         var generation = _liveLoadGeneration;
         var loadCts = _liveLoadCts = new CancellationTokenSource();
-        LoadingRing.IsActive = true;
+        SetCatalogLoading(true);
         try
         {
             await LiveConfigService.Instance.GetChannels(live);
@@ -439,7 +494,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
             if (ReferenceEquals(_liveLoadCts, loadCts))
             {
                 _liveLoadCts = null;
-                LoadingRing.IsActive = false;
+                SetCatalogLoading(false);
             }
             loadCts.Dispose();
         }
@@ -787,7 +842,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
             NextProgramTopText.Visibility = Visibility.Collapsed;
             UpdateLineButton();
             PlayInfo.IsOpen = false;
-            LoadingRing.IsActive = true;
+            SetPlaybackLoading(true, false);
             _updatingSeek = true;
             LiveProgressRow.Visibility = Visibility.Collapsed;
             LiveBufferBar.IsIndeterminate = false;
@@ -798,6 +853,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
             UpdateLiveTimeLabel();
             var play = await PlayResolver.ResolveLive(item.Channel, ct);
             if (!IsCurrentPlayRequest(cts, generation)) return;
+            SetPlaybackLoading(true, true);
             _core.Open(play);
             _ = UpdateProgramAsync(item);
             _programTimer.Stop();
@@ -808,7 +864,7 @@ public sealed partial class LivePage : Page, INavigationPlayback
         {
             if (IsCurrentPlayRequest(cts, generation))
             {
-                LoadingRing.IsActive = false;
+                SetPlaybackLoading(false);
                 SetSourceTransition(false);
                 ShowInfo("播放失败：" + ex.Message, InfoBarSeverity.Error);
             }

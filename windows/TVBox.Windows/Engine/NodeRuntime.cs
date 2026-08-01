@@ -249,7 +249,7 @@ public static class NodeRuntime
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch { }
-            await Task.Delay(300, cancellationToken).ConfigureAwait(false);
+            await Task.Delay(75, cancellationToken).ConfigureAwait(false);
         }
         return false;
     }

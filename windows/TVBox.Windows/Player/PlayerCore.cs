@@ -10,6 +10,7 @@ public class PlayerCore : IDisposable
 {
     const string TAG = "PlayerCore";
     const string MissingFFmpegMsg = "FFmpeg 解码库未就绪：安装内容可能不完整，请重新安装或完整解压 TVBox";
+    const long TransferSampleIntervalMs = 500;
     static readonly string[] RequiredFFmpegLibraries =
     {
         "avcodec-62.dll",
@@ -34,6 +35,7 @@ public class PlayerCore : IDisposable
     int _scale;
     int _openGeneration;
     int _openingGeneration;
+    int _activePlaybackGeneration;
     bool _formatRecoveryTried;
     bool _videoRecoveryTried;
     bool _recovering;
@@ -44,6 +46,9 @@ public class PlayerCore : IDisposable
     SubtitleOpenRequest _subtitleActive;
     SubtitleOpenRequest _subtitlePending;
     long _subtitleRequestId;
+    long _transferSampleTick;
+    long _transferSampleBytes;
+    int _transferSampleGeneration = -1;
 
     public event Action Opened;
     public event Action<string> Errored;
@@ -51,6 +56,10 @@ public class PlayerCore : IDisposable
     public event Action<long, bool, string> SubtitleOpened;
     /// <summary>当前进度（毫秒），约 250ms 一次（UI 线程）。</summary>
     public event Action<long> TimeChanged;
+    /// <summary>当前媒体有效载荷吞吐量（字节/秒，约 500ms 一次，UI 线程）。</summary>
+    public event Action<double> TransferRateChanged;
+    /// <summary>播放中的缓冲状态（UI 线程；起播阶段由 Opened/Errored 管理）。</summary>
+    public event Action<bool> BufferingChanged;
 
     /// <summary>App 启动时调用一次：探测 ffmpeg 目录并 Engine.Start。缺失时 EngineReady=false（不自动下载）。</summary>
     public static void StartEngine()
@@ -117,6 +126,8 @@ public class PlayerCore : IDisposable
             Fly = new FlyleafLib.MediaPlayer.Player(config);
             Fly.OpenCompleted += OnOpenCompleted;
             Fly.PlaybackStopped += OnPlaybackStopped;
+            Fly.BufferingStarted += OnBufferingStarted;
+            Fly.BufferingCompleted += OnBufferingCompleted;
         }
         catch (Exception e) { Core.Logger.E(TAG, "创建播放器失败: " + e.Message); }
         App.Post(() =>
@@ -124,9 +135,16 @@ public class PlayerCore : IDisposable
             if (App.Dispatcher == null) return;
             _timer = App.Dispatcher.CreateTimer();
             _timer.Interval = TimeSpan.FromMilliseconds(250);
-            _timer.Tick += (s, e) => { if (!_disposed && Fly != null && Fly.CanPlay) TimeChanged?.Invoke(PositionMs); };
+            _timer.Tick += OnUiTimerTick;
             if (_uiUpdatesEnabled) _timer.Start();
         });
+    }
+
+    void OnUiTimerTick(DispatcherQueueTimer sender, object args)
+    {
+        if (_disposed || Fly == null) return;
+        SampleTransferRate();
+        if (Fly.CanPlay) TimeChanged?.Invoke(PositionMs);
     }
 
     public void SetUiUpdatesEnabled(bool enabled)
@@ -135,9 +153,66 @@ public class PlayerCore : IDisposable
         App.Post(() =>
         {
             if (_disposed || _timer == null) return;
+            ResetTransferSampling(enabled);
             if (enabled) _timer.Start();
             else _timer.Stop();
         });
+    }
+
+    void SampleTransferRate()
+    {
+        var totalBytes = ReadTransferBytes();
+        if (totalBytes < 0) return;
+
+        var now = Environment.TickCount64;
+        var generation = Volatile.Read(ref _openGeneration);
+        if (_transferSampleGeneration != generation || _transferSampleTick == 0 ||
+            totalBytes < _transferSampleBytes)
+        {
+            _transferSampleGeneration = generation;
+            _transferSampleTick = now;
+            _transferSampleBytes = totalBytes;
+            return;
+        }
+
+        var elapsedMs = now - _transferSampleTick;
+        if (elapsedMs < TransferSampleIntervalMs) return;
+
+        var bytesPerSecond = Math.Max(0, totalBytes - _transferSampleBytes) * 1000d / elapsedMs;
+        _transferSampleTick = now;
+        _transferSampleBytes = totalBytes;
+        TransferRateChanged?.Invoke(bytesPerSecond);
+    }
+
+    long ReadTransferBytes()
+    {
+        try
+        {
+            if (Fly == null) return -1;
+            return Math.Max(0, Fly.VideoDemuxer?.TotalBytes ?? 0) +
+                   Math.Max(0, Fly.AudioDemuxer?.TotalBytes ?? 0) +
+                   Math.Max(0, Fly.SubtitlesDemuxer?.TotalBytes ?? 0);
+        }
+        catch { return -1; }
+    }
+
+    void ResetTransferSampling(bool notify, int generation = -1)
+    {
+        // Flyleaf resets demuxer counters asynchronously while replacing a source.
+        // Let the first timer tick establish a baseline so bytes left by the previous
+        // source cannot appear as a transient transfer-rate spike.
+        _transferSampleTick = 0;
+        _transferSampleBytes = 0;
+        _transferSampleGeneration = generation;
+        if (notify && !_disposed) TransferRateChanged?.Invoke(0);
+    }
+
+    public static string FormatTransferRate(double bytesPerSecond)
+    {
+        if (!double.IsFinite(bytesPerSecond) || bytesPerSecond <= 0) return "0 B/s";
+        if (bytesPerSecond >= 1024 * 1024) return $"{bytesPerSecond / (1024 * 1024):0.0} MB/s";
+        if (bytesPerSecond >= 1024) return $"{bytesPerSecond / 1024:0} KB/s";
+        return $"{bytesPerSecond:0} B/s";
     }
 
     public void Open(PlayItem item)
@@ -145,7 +220,9 @@ public class PlayerCore : IDisposable
         if (item == null || string.IsNullOrWhiteSpace(item.Url))
         {
             var invalidGeneration = Interlocked.Increment(ref _openGeneration);
+            ResetTransferSampling(true, invalidGeneration);
             Volatile.Write(ref _openingGeneration, 0);
+            Volatile.Write(ref _activePlaybackGeneration, 0);
             _item = null;
             PostIfCurrent(invalidGeneration, () => Errored?.Invoke("播放地址为空"));
             return;
@@ -153,6 +230,8 @@ public class PlayerCore : IDisposable
         lock (_subtitleLock) _subtitlePending = null;
         var request = Snapshot(item);
         var generation = Interlocked.Increment(ref _openGeneration);
+        ResetTransferSampling(true, generation);
+        Volatile.Write(ref _activePlaybackGeneration, 0);
         _item = request;
         Volatile.Write(ref _openingGeneration, generation);
         _formatRecoveryTried = false;
@@ -190,7 +269,9 @@ public class PlayerCore : IDisposable
     {
         Interlocked.Increment(ref _openGeneration);
         Volatile.Write(ref _openingGeneration, 0);
+        Volatile.Write(ref _activePlaybackGeneration, 0);
         _item = null;
+        ResetTransferSampling(true);
         try { Fly?.Stop(); } catch { }
     }
 
@@ -432,6 +513,23 @@ public class PlayerCore : IDisposable
         catch { }
     }
 
+    void OnBufferingStarted(object sender, EventArgs e) => RaiseBufferingChanged(true);
+
+    void OnBufferingCompleted(object sender, BufferingCompletedArgs e) => RaiseBufferingChanged(false);
+
+    void RaiseBufferingChanged(bool buffering)
+    {
+        var generation = Volatile.Read(ref _activePlaybackGeneration);
+        if (generation <= 0 || generation != Volatile.Read(ref _openGeneration) ||
+            Volatile.Read(ref _openingGeneration) != 0 || _item == null) return;
+        PostIfCurrent(generation, () =>
+        {
+            if (generation == Volatile.Read(ref _activePlaybackGeneration) &&
+                Volatile.Read(ref _openingGeneration) == 0 && _item != null)
+                BufferingChanged?.Invoke(buffering);
+        });
+    }
+
     void OnOpenCompleted(object sender, OpenCompletedArgs e)
     {
         if (_disposed) return;
@@ -452,6 +550,7 @@ public class PlayerCore : IDisposable
         if (e.Success)
         {
             Interlocked.CompareExchange(ref _openingGeneration, 0, generation);
+            Volatile.Write(ref _activePlaybackGeneration, generation);
             // Flyleaf can deliver the stopped event from the replaced decoder after
             // the new decoder has opened. Do not surface that stale error.
             _ignorePlaybackStopUntil = Environment.TickCount64 + 2500;
@@ -596,6 +695,7 @@ public class PlayerCore : IDisposable
         _disposed = true;
         Interlocked.Increment(ref _openGeneration);
         Volatile.Write(ref _openingGeneration, 0);
+        Volatile.Write(ref _activePlaybackGeneration, 0);
         _item = null;
         lock (_subtitleLock)
         {
@@ -609,6 +709,8 @@ public class PlayerCore : IDisposable
             {
                 Fly.OpenCompleted -= OnOpenCompleted;
                 Fly.PlaybackStopped -= OnPlaybackStopped;
+                Fly.BufferingStarted -= OnBufferingStarted;
+                Fly.BufferingCompleted -= OnBufferingCompleted;
                 Fly.Dispose();
             }
         }

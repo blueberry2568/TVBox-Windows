@@ -171,8 +171,20 @@
                     <TextBlock x:Name="NumberText" Text="" FontSize="56" FontWeight="SemiBold"/>
                 </Border>
 
-                <ProgressRing x:Name="LoadingRing" Width="48" Height="48" IsActive="False"
-                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="14">
+                    <ProgressRing x:Name="LoadingRing" Width="48" Height="48"
+                                  IsActive="False" Visibility="Collapsed"/>
+                    <StackPanel x:Name="LiveLoadingSpeedPanel"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Center"
+                                Spacing="7"
+                                Visibility="Collapsed">
+                        <FontIcon Glyph="&#xE896;" FontSize="12"
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="LiveLoadingSpeedText" Text="0 B/s" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </StackPanel>
 
                 <!-- 直播控制栏：播放、换台、进度、线路、小窗与全屏统一放到底部。 -->
                 <Grid x:Name="BottomBar" VerticalAlignment="Bottom" Padding="20,52,20,14"

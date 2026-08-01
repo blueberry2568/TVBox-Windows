@@ -45,13 +45,19 @@ public class VodConfigService
     public async Task LoadAsync(ConfigRecord config)
     {
         if (config == null || string.IsNullOrWhiteSpace(config.Url)) throw new Exception("请输入点播配置地址");
-        await LoadCoreAsync(config, null);
+        await LoadCoreAsync(config, null, false);
+    }
+
+    public async Task LoadStartupAsync(ConfigRecord config)
+    {
+        if (config == null || string.IsNullOrWhiteSpace(config.Url)) throw new Exception("请输入点播配置地址");
+        await LoadCoreAsync(config, null, true);
     }
 
     /// <summary>Reloads only while the expected source is still current.</summary>
-    internal Task<bool> ReloadCurrentAsync(string expectedUrl) => LoadCoreAsync(null, expectedUrl);
+    internal Task<bool> ReloadCurrentAsync(string expectedUrl) => LoadCoreAsync(null, expectedUrl, false);
 
-    async Task<bool> LoadCoreAsync(ConfigRecord requested, string expectedUrl)
+    async Task<bool> LoadCoreAsync(ConfigRecord requested, string expectedUrl, bool preferCache)
     {
         await _loadLock.WaitAsync();
         try
@@ -72,8 +78,9 @@ public class VodConfigService
                 depots,
                 imports,
                 new HashSet<string>(StringComparer.OrdinalIgnoreCase),
-                0);
-            var pending = BuildPending(resolved.Config, resolved.Node, resolved.Name);
+                0,
+                preferCache);
+            var pending = await Task.Run(() => BuildPending(resolved.Config, resolved.Node, resolved.Name));
             await CommitAsync(pending);
 
             foreach (var import in imports)
@@ -103,15 +110,26 @@ public class VodConfigService
         List<ConfigRecord> depots,
         List<DepotImport> imports,
         HashSet<string> visited,
-        int depth)
+        int depth,
+        bool preferCache)
     {
         if (depth > MaxDepotDepth) throw new Exception("配置仓库嵌套层级过多");
         var url = UrlUtil.Convert(config.Url);
         if (!visited.Add(url)) throw new Exception("配置仓库存在循环引用");
 
         // Node.js 源（cat/T4 型 index.js）：正文是 6MB 服务端程序而非配置，需先起服务再取 /config
-        var json = await NodeSource.TryLoadAsync(url) ?? await Decoder.GetJson(url);
-        var node = JsonUtil.Parse(json) ?? throw new Exception("配置解析失败");
+        string json = null;
+        if (preferCache)
+        {
+            json = await NodeSource.TryLoadCachedAsync(url);
+            if (json == null)
+            {
+                json = await Decoder.TryReadSnapshotAsync(url);
+                if (json != null) Decoder.RefreshSnapshotInBackground(url);
+            }
+        }
+        json ??= await NodeSource.TryLoadAsync(url) ?? await Decoder.GetJson(url);
+        var node = await Task.Run(() => JsonUtil.Parse(json)) ?? throw new Exception("配置解析失败");
         if (node["msg"] != null) throw new Exception(node["msg"].ToString());
         if (node["urls"] == null) return new ResolvedConfig(config, node, name);
 
@@ -124,7 +142,7 @@ public class VodConfigService
         imports.AddRange(candidates);
         depots.Add(config);
         var first = candidates[0];
-        return await ResolveConfigAsync(first.Config, first.Name, depots, imports, visited, depth + 1);
+        return await ResolveConfigAsync(first.Config, first.Name, depots, imports, visited, depth + 1, preferCache);
     }
 
     PendingConfig BuildPending(ConfigRecord config, JsonNode node, string name)

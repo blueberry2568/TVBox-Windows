@@ -3,9 +3,9 @@
     <OutputType>Package</OutputType>
     <InstallerPlatform>x64</InstallerPlatform>
     <Platform>x64</Platform>
-    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.6</ProductVersion>
-    <ProductCode Condition="'$(ProductCode)' == ''">59A45120-C602-52E0-8327-BF885FC364A2</ProductCode>
-    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\TVBox-x64-1.0.6</PublishDir>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.7</ProductVersion>
+    <ProductCode Condition="'$(ProductCode)' == ''">6AE87EC4-0D50-56C3-87FE-413883EFFB0A</ProductCode>
+    <PublishDir Condition="'$(PublishDir)' == ''">$(MSBuildThisFileDirectory)..\artifacts\TVBox-x64-1.0.7</PublishDir>
     <Cultures>zh-CN</Cultures>
     <OutputName>TVBox-Setup-x64-$(ProductVersion)</OutputName>
     <DefineConstants>$(DefineConstants);ProductVersion=$(ProductVersion);ProductCode=$(ProductCode);PublishDir=$(PublishDir)</DefineConstants>

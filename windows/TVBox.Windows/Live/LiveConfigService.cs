@@ -11,6 +11,7 @@ namespace TVBoxForWindows.Live;
 public class LiveConfigService
 {
     const int MaxDepotDepth = 3;
+    readonly SemaphoreSlim _loadLock = new(1, 1);
     bool _syncedToVod;
 
     public static LiveConfigService Instance { get; } = new();
@@ -44,16 +45,33 @@ public class LiveConfigService
     }
 
     /// <summary>Loads TXT/M3U/JSON, a TVBox video config, or a CatPawOpen subscription.</summary>
-    public async Task LoadAsync(ConfigRecord config)
+    public Task LoadAsync(ConfigRecord config) => LoadCoreAsync(config, false, true);
+
+    public Task LoadStartupAsync(ConfigRecord config, bool allowNodeFallback = true) =>
+        LoadCoreAsync(config, true, allowNodeFallback);
+
+    async Task LoadCoreAsync(ConfigRecord config, bool preferCache, bool allowNodeFallback)
     {
         if (config == null || string.IsNullOrWhiteSpace(config.Url)) throw new Exception("请输入直播源地址");
-        var lives = await LoadAddress(config.Url.Trim(), 0, new(StringComparer.OrdinalIgnoreCase));
-        if (lives.Count == 0) throw new Exception("地址中没有可用的直播源");
+        await _loadLock.WaitAsync();
+        try
+        {
+            var lives = await LoadAddress(
+                config.Url.Trim(),
+                0,
+                new(StringComparer.OrdinalIgnoreCase),
+                preferCache,
+                allowNodeFallback);
+            if (lives.Count == 0) throw new Exception("地址中没有可用的直播源");
+            if (preferCache &&
+                !string.Equals(Setting.ConfigLive, config.Url, StringComparison.OrdinalIgnoreCase)) return;
 
-        Apply(config, lives);
-        _syncedToVod = false;
-        Stores.SaveConfig(config);
-        Setting.ConfigLive = config.Url;
+            Apply(config, lives);
+            _syncedToVod = false;
+            Stores.SaveConfig(config);
+            Setting.ConfigLive = config.Url;
+        }
+        finally { _loadLock.Release(); }
         App.Post(() => Loaded?.Invoke());
     }
 
@@ -74,7 +92,12 @@ public class LiveConfigService
         return Task.CompletedTask;
     }
 
-    async Task<List<Models.Live>> LoadAddress(string address, int depth, HashSet<string> visited)
+    async Task<List<Models.Live>> LoadAddress(
+        string address,
+        int depth,
+        HashSet<string> visited,
+        bool preferCache,
+        bool allowNodeFallback)
     {
         if (depth > MaxDepotDepth) throw new Exception("配置仓库嵌套层级过多");
         var target = UrlUtil.Convert(address);
@@ -82,7 +105,7 @@ public class LiveConfigService
 
         if (NodeSource.MaybeNode(target))
         {
-            var catPaw = await TryLoadCatPawLives(target);
+            var catPaw = await TryLoadCatPawLives(target, preferCache, allowNodeFallback);
             if (catPaw != null)
             {
                 if (catPaw.Count == 0) throw new Exception("CatPawOpen 配置中没有可用的直播源");
@@ -90,8 +113,8 @@ public class LiveConfigService
             }
         }
 
-        var text = await LoadDecoded(target);
-        var node = JsonUtil.Parse(text);
+        var text = await LoadDecoded(target, preferCache);
+        var node = await Task.Run(() => JsonUtil.Parse(text));
         if (node != null)
         {
             if (node is JsonObject depot && depot["urls"] is JsonArray urls)
@@ -101,7 +124,15 @@ public class LiveConfigService
                 {
                     var entry = ModelJson.Parse<Depot>(item);
                     if (string.IsNullOrWhiteSpace(entry?.Url)) continue;
-                    try { return await LoadAddress(Resolve(target, entry.Url), depth + 1, visited); }
+                    try
+                    {
+                        return await LoadAddress(
+                            Resolve(target, entry.Url),
+                            depth + 1,
+                            visited,
+                            preferCache,
+                            allowNodeFallback);
+                    }
                     catch (Exception e) { failure = e; }
                 }
                 throw failure ?? new Exception("配置仓库中没有可用地址");
@@ -115,29 +146,49 @@ public class LiveConfigService
         }
 
         var live = new Models.Live { Name = UrlUtil.GetName(address), Url = target };
-        LiveParser.Text(live, text);
+        await Task.Run(() => LiveParser.Text(live, text));
         if (live.Groups.Count == 0) throw new Exception("直播列表格式无法识别");
         return new() { live };
     }
 
-    static async Task<string> LoadDecoded(string target)
+    static async Task<string> LoadDecoded(string target, bool preferCache)
     {
         var scheme = UrlUtil.Scheme(target);
-        if (scheme is "http" or "https") return await Core.Decoder.GetJson(target, allowPlainText: true);
+        if (scheme is "http" or "https")
+        {
+            if (preferCache)
+            {
+                var cached = await Core.Decoder.TryReadSnapshotAsync(target, allowPlainText: true);
+                if (cached != null)
+                {
+                    Core.Decoder.RefreshSnapshotInBackground(target, allowPlainText: true);
+                    return cached;
+                }
+            }
+            return await Core.Decoder.GetJson(target, allowPlainText: true);
+        }
         var text = await HttpUtil.Load(target);
         if (string.IsNullOrWhiteSpace(text)) throw new Exception("直播源内容为空或无法读取");
         return Core.Decoder.Verify(target, text);
     }
 
     /// <summary>Reads CatPawOpen's companion config without starting or replacing the active Node runtime.</summary>
-    static async Task<List<Models.Live>> TryLoadCatPawLives(string sourceUrl)
+    static async Task<List<Models.Live>> TryLoadCatPawLives(
+        string sourceUrl,
+        bool preferCache,
+        bool allowNodeFallback)
     {
-        var companion = await NodeSource.TryLoadCompanionAsync(sourceUrl);
+        var companion = preferCache ? await NodeSource.TryLoadCachedCompanionAsync(sourceUrl) : null;
+        if (companion != null) NodeSource.RefreshSourceCacheInBackground(sourceUrl);
+        companion ??= await NodeSource.TryLoadCompanionAsync(sourceUrl);
         if (companion == null) return null;
-        var node = ParseCompanionJs(companion.Value.Script);
+        var node = await Task.Run(() => ParseCompanionJs(companion.Value.Script));
         if (node == null) throw new Exception("CatPawOpen 伴随配置无法解析");
         var lives = ExtractLives(node, companion.Value.Url);
-        return lives.Count > 0 ? lives : await TryLoadCatPawNodeLives(sourceUrl);
+        if (lives.Count > 0) return lives;
+        return allowNodeFallback
+            ? await TryLoadCatPawNodeLives(sourceUrl, preferCache)
+            : new List<Models.Live>();
     }
 
     static JsonNode ParseCompanionJs(string script)
@@ -156,14 +207,15 @@ public class LiveConfigService
     }
 
     /// <summary>Imports live sources exposed by CatPaw's Node service when the companion has no live/lives data.</summary>
-    static async Task<List<Models.Live>> TryLoadCatPawNodeLives(string sourceUrl)
+    static async Task<List<Models.Live>> TryLoadCatPawNodeLives(string sourceUrl, bool preferCache)
     {
         var previousBase = NodeRuntime.BaseUrl;
         var previousVod = VodConfigService.Instance.Config?.Url ?? "";
         var sameAsVod = SameAddress(sourceUrl, previousVod);
         try
         {
-            var flat = await NodeSource.TryLoadAsync(sourceUrl);
+            var flat = preferCache ? await NodeSource.TryLoadCachedAsync(sourceUrl) : null;
+            flat ??= await NodeSource.TryLoadAsync(sourceUrl);
             if (string.IsNullOrWhiteSpace(flat)) return new();
             var baseUrl = NodeRuntime.BaseUrl;
             if (string.IsNullOrWhiteSpace(baseUrl)) return new();
@@ -176,7 +228,13 @@ public class LiveConfigService
         {
             if (!sameAsVod && !string.IsNullOrWhiteSpace(previousBase) && NodeSource.MaybeNode(previousVod))
             {
-                try { await NodeSource.TryLoadAsync(UrlUtil.Convert(previousVod)); }
+                try
+                {
+                    var restored = preferCache
+                        ? await NodeSource.TryLoadCachedAsync(UrlUtil.Convert(previousVod))
+                        : null;
+                    if (restored == null) await NodeSource.TryLoadAsync(UrlUtil.Convert(previousVod));
+                }
                 catch (Exception e) { Logger.E("LiveConfig", "恢复点播 Node 源失败: " + e.Message); }
             }
             else if (!sameAsVod && !string.IsNullOrWhiteSpace(NodeRuntime.BaseUrl)) NodeRuntime.Shutdown();

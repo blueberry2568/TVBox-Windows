@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.0.7 - 2026-08-01
+
+### Added
+
+- Added a shared loading indicator and real-time transfer speed display for video and live playback buffering.
+
+### Fixed
+
+- Restored the text-input cursor and client input behavior for the search box inside the custom title bar.
+- Restored saved video and live sources from validated local snapshots before background network refresh, reducing startup wait time.
+- Reused validated CatPaw scripts during startup and shortened Node runtime readiness polling without changing explicit reload behavior.
+
 ## 1.0.6 - 2026-08-01
 
 ### Fixed

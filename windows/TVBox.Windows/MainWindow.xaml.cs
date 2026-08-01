@@ -9,12 +9,14 @@ using System.Numerics;
 using System.Runtime.InteropServices.WindowsRuntime;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
+using Microsoft.UI.Input;
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Graphics;
 using Windows.Storage.Streams;
 
 namespace TVBoxForWindows;
@@ -32,6 +34,8 @@ public sealed partial class MainWindow : Window
     const int PlaybackContentFadeDurationMs = 120;
     const float PlaybackTransitionOpacity = 0.985f;
     readonly WindowPresentationManager _presentation;
+    InputNonClientPointerSource _titleBarInput;
+    XamlRoot _titleBarXamlRoot;
     Microsoft.UI.Dispatching.DispatcherQueueTimer _shellLayoutRefreshTimer;
     Microsoft.UI.Dispatching.DispatcherQueueTimer _playbackWindowTransitionTimer;
     long _playbackWindowTransitionStartedAt;
@@ -56,6 +60,7 @@ public sealed partial class MainWindow : Window
     string _activeSection = "vod";
     string _loadedVodConfigUrl;
     Task _initialVodRestoreTask = Task.CompletedTask;
+    Task _initialLiveRestoreTask = Task.CompletedTask;
 
     public MainWindow()
     {
@@ -66,6 +71,9 @@ public sealed partial class MainWindow : Window
         SystemBackdrop = new MicaBackdrop();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(DragRegion);
+        TitleBarArea.Loaded += OnTitleBarAreaLoaded;
+        TitleBarArea.SizeChanged += OnTitleBarAreaSizeChanged;
+        GlobalSearch.SizeChanged += OnTitleBarAreaSizeChanged;
         // 设置任务栏 / Alt-Tab 图标。
         var iconPath = System.IO.Path.Combine(AppPaths.IconDir, "icon.ico");
         try
@@ -86,6 +94,12 @@ public sealed partial class MainWindow : Window
         Closed += (s, e) =>
         {
             _closed = true;
+            if (_titleBarXamlRoot != null)
+            {
+                _titleBarXamlRoot.Changed -= OnTitleBarXamlRootChanged;
+                _titleBarXamlRoot = null;
+            }
+            ClearTitleBarPassthroughRegion();
             VodConfigService.Instance.Loaded -= OnConfigLoaded;
             AppWindow.Changed -= OnAppWindowChanged;
             StopShellLayoutRefreshStabilizer();
@@ -120,6 +134,68 @@ public sealed partial class MainWindow : Window
         {
             Logger.E("TitleIcon", exception.Message);
         }
+        QueueTitleBarPassthroughUpdate();
+    }
+
+    void OnTitleBarAreaLoaded(object sender, RoutedEventArgs e)
+    {
+        var xamlRoot = TitleBarArea.XamlRoot;
+        if (!ReferenceEquals(_titleBarXamlRoot, xamlRoot))
+        {
+            if (_titleBarXamlRoot != null) _titleBarXamlRoot.Changed -= OnTitleBarXamlRootChanged;
+            _titleBarXamlRoot = xamlRoot;
+            if (_titleBarXamlRoot != null) _titleBarXamlRoot.Changed += OnTitleBarXamlRootChanged;
+        }
+        QueueTitleBarPassthroughUpdate();
+    }
+
+    void OnTitleBarAreaSizeChanged(object sender, SizeChangedEventArgs e) => QueueTitleBarPassthroughUpdate();
+
+    void OnTitleBarXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) =>
+        QueueTitleBarPassthroughUpdate();
+
+    void QueueTitleBarPassthroughUpdate()
+    {
+        if (_closed) return;
+        if (_immersive)
+        {
+            ClearTitleBarPassthroughRegion();
+            return;
+        }
+        DispatcherQueue.TryEnqueue(UpdateTitleBarPassthroughRegion);
+    }
+
+    void UpdateTitleBarPassthroughRegion()
+    {
+        if (_closed || _immersive || GlobalSearch.XamlRoot == null ||
+            GlobalSearch.ActualWidth <= 0 || GlobalSearch.ActualHeight <= 0) return;
+        try
+        {
+            var bounds = GlobalSearch.TransformToVisual(null).TransformBounds(
+                new Windows.Foundation.Rect(0, 0, GlobalSearch.ActualWidth, GlobalSearch.ActualHeight));
+            var scale = GlobalSearch.XamlRoot.RasterizationScale;
+            var left = (int)Math.Floor(bounds.X * scale);
+            var top = (int)Math.Floor(bounds.Y * scale);
+            var right = (int)Math.Ceiling((bounds.X + bounds.Width) * scale);
+            var bottom = (int)Math.Ceiling((bounds.Y + bounds.Height) * scale);
+            var rect = new RectInt32(
+                left,
+                top,
+                Math.Max(1, right - left),
+                Math.Max(1, bottom - top));
+            _titleBarInput ??= InputNonClientPointerSource.GetForWindowId(AppWindow.Id);
+            _titleBarInput.SetRegionRects(NonClientRegionKind.Passthrough, [rect]);
+        }
+        catch (Exception e)
+        {
+            Logger.E("TitleBarInput", e.Message);
+        }
+    }
+
+    void ClearTitleBarPassthroughRegion()
+    {
+        try { _titleBarInput?.ClearRegionRects(NonClientRegionKind.Passthrough); }
+        catch (Exception e) { Logger.E("TitleBarInput", e.Message); }
     }
 
     public void SetImmersive(bool immersive)
@@ -150,6 +226,7 @@ public sealed partial class MainWindow : Window
         }
         RootGrid.RowDefinitions[0].Height = immersive ? new GridLength(0) : new GridLength(TitleBarHeight);
         TitleBarArea.Visibility = immersive ? Visibility.Collapsed : Visibility.Visible;
+        QueueTitleBarPassthroughUpdate();
         var background = immersive ? new SolidColorBrush(Colors.Black) : null;
         RootGrid.Background = background;
         Nav.Background = background;
@@ -171,6 +248,8 @@ public sealed partial class MainWindow : Window
     /// downgraded to the non-blocking refresh warning.
     /// </summary>
     public Task InitialVodRestoreTask => _initialVodRestoreTask;
+
+    public Task InitialLiveRestoreTask => _initialLiveRestoreTask;
 
     public bool IsPlaybackWindowTransitionActive => _playbackWindowTransitionActive;
 
@@ -569,13 +648,32 @@ public sealed partial class MainWindow : Window
         try
         {
             SetLoading(true);
-            await VodConfigService.Instance.LoadAsync(config);
+            await VodConfigService.Instance.LoadStartupAsync(config);
+            _initialLiveRestoreTask = RestoreSavedLiveSourceAsync(config.Url);
         }
         catch (Exception e)
         {
             if (!_closed) ShowConfiguredLoadFailure(e.Message);
         }
         finally { if (!_closed) SetLoading(false); }
+    }
+
+    static async Task RestoreSavedLiveSourceAsync(string vodUrl)
+    {
+        try
+        {
+            if (LiveConfigService.Instance.Lives.Count > 0) return;
+            var config = Stores.ResolveConfig(Setting.ConfigLive, 1);
+            if (config == null || string.IsNullOrWhiteSpace(config.Url)) return;
+            var target = UrlUtil.Convert(config.Url);
+            var canReplaceNodeRuntime = !NodeSource.MaybeNode(target) ||
+                string.Equals(config.Url, vodUrl, StringComparison.OrdinalIgnoreCase);
+            await LiveConfigService.Instance.LoadStartupAsync(config, canReplaceNodeRuntime);
+        }
+        catch (Exception error)
+        {
+            Logger.E("LiveConfig", "后台恢复直播源失败：" + error.Message);
+        }
     }
 
     async Task LoadConfigAsync(ConfigRecord config)

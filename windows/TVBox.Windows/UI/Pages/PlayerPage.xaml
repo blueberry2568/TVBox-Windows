@@ -133,6 +133,16 @@
                     <ProgressRing IsActive="True" Width="56" Height="56"/>
                     <TextBlock x:Name="StatusText" Text="解析中…" FontSize="14" HorizontalAlignment="Center"
                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    <StackPanel x:Name="LoadingSpeedPanel"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Center"
+                                Spacing="7"
+                                Visibility="Collapsed">
+                        <FontIcon Glyph="&#xE896;" FontSize="12"
+                                  Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="LoadingSpeedText" Text="0 B/s" FontSize="13"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
 

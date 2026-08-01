@@ -26,25 +26,42 @@ public static class Decoder
         }
         catch (Exception networkError)
         {
-            try
+            var cached = TryReadSnapshot(url, allowPlainText);
+            if (cached != null)
             {
-                var cached = DurableJsonFile.Read(
-                    snapshot,
-                    content => IsCacheable(content, allowPlainText) ? content : null,
-                    () => null);
-                if (cached != null)
-                {
-                    Logger.E("ConfigCache", "配置刷新失败，已使用本地快照：" + networkError.Message);
-                    return cached;
-                }
+                Logger.E("ConfigCache", "配置刷新失败，已使用本地快照：" + networkError.Message);
+                return cached;
             }
-            catch (Exception cacheError)
-            {
-                Logger.E("ConfigCache", "读取配置快照失败：" + cacheError.Message);
-            }
-
             throw;
         }
+    }
+
+    internal static string TryReadSnapshot(string url, bool allowPlainText = false)
+    {
+        try
+        {
+            return DurableJsonFile.Read(
+                SnapshotPath(url),
+                content => IsCacheable(content, allowPlainText) ? content : null,
+                () => null);
+        }
+        catch (Exception error)
+        {
+            Logger.E("ConfigCache", "读取配置快照失败：" + error.Message);
+            return null;
+        }
+    }
+
+    internal static Task<string> TryReadSnapshotAsync(string url, bool allowPlainText = false) =>
+        Task.Run(() => TryReadSnapshot(url, allowPlainText));
+
+    internal static void RefreshSnapshotInBackground(string url, bool allowPlainText = false) =>
+        _ = RefreshSnapshotAsync(url, allowPlainText);
+
+    static async Task RefreshSnapshotAsync(string url, bool allowPlainText)
+    {
+        try { await GetJson(url, allowPlainText).ConfigureAwait(false); }
+        catch (Exception error) { Logger.E("ConfigCache", "后台刷新配置失败：" + error.Message); }
     }
 
     static string SnapshotPath(string url)

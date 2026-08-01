@@ -67,7 +67,94 @@ public static class NodeSource
         }
     }
 
+    /// <summary>Starts a previously verified CatPawOpen source without blocking on remote MD5 checks.</summary>
+    internal static async Task<string> TryLoadCachedAsync(string url)
+    {
+        if (!MaybeNode(url)) return null;
+        try
+        {
+            var hasManifest = HasSuffix(url, ".js.md5");
+            var jsUrl = hasManifest ? ReplaceSuffix(url, ".js.md5", ".js") : url;
+            var sourceDir = Path.Combine(AppPaths.Node, "source-" + SourceKey(jsUrl));
+            var scriptPath = Path.Combine(sourceDir, "index.js");
+            var configPath = Path.Combine(sourceDir, "index.config.js");
+            var cachedFiles = await Task.Run(() =>
+                (Script: ReadExisting(scriptPath), Config: ReadExisting(configPath)));
+            var scriptBytes = cachedFiles.Script;
+            var configBytes = cachedFiles.Config;
+            if (scriptBytes == null || configBytes == null) return null;
+
+            var scriptText = Encoding.UTF8.GetString(scriptBytes);
+            if (!hasManifest && !LooksLikeNode(scriptText)) return null;
+
+            var version = Hash(scriptBytes) + ":" + Hash(configBytes);
+            var dataDir = Path.Combine(sourceDir, "data");
+            Directory.CreateDirectory(dataDir);
+            var baseUrl = await NodeRuntime.StartAsync(scriptPath, configPath, dataDir, version);
+            if (baseUrl == null) return null;
+
+            var rsp = await HttpUtil.Get(baseUrl + "/config", timeoutMs: 10000);
+            if (rsp.Code is < 200 or >= 300) return null;
+            var flat = Flatten(rsp.Text(), baseUrl);
+            if (flat == null) return null;
+            RememberSnapshot(baseUrl, rsp.Body);
+            RefreshSourceCacheInBackground(url);
+            Logger.D(Tag, "已从本地缓存恢复 CatPawOpen 源：" + baseUrl);
+            return flat;
+        }
+        catch (Exception error)
+        {
+            Logger.E(Tag, "本地 CatPawOpen 源恢复失败，将使用在线加载：" + error.Message);
+            return null;
+        }
+    }
+
     internal readonly record struct CompanionConfig(string Url, string Script);
+
+    internal static Task<CompanionConfig?> TryLoadCachedCompanionAsync(string sourceUrl) =>
+        Task.Run(() => TryLoadCachedCompanion(sourceUrl));
+
+    static CompanionConfig? TryLoadCachedCompanion(string sourceUrl)
+    {
+        if (!MaybeNode(sourceUrl)) return null;
+        try
+        {
+            var hasManifest = HasSuffix(sourceUrl, ".js.md5");
+            var jsUrl = hasManifest ? ReplaceSuffix(sourceUrl, ".js.md5", ".js") : sourceUrl;
+            var sourceDir = Path.Combine(AppPaths.Node, "source-" + SourceKey(jsUrl));
+            var script = ReadExisting(Path.Combine(sourceDir, "index.js"));
+            var config = ReadExisting(Path.Combine(sourceDir, "index.config.js"));
+            if (config == null || (!hasManifest && (script == null || !LooksLikeNode(Encoding.UTF8.GetString(script)))))
+                return null;
+            return new CompanionConfig(ReplaceSuffix(jsUrl, ".js", ".config.js"), Encoding.UTF8.GetString(config));
+        }
+        catch { return null; }
+    }
+
+    internal static void RefreshSourceCacheInBackground(string sourceUrl)
+    {
+        if (!MaybeNode(sourceUrl)) return;
+        _ = RefreshSourceCacheAsync(sourceUrl);
+    }
+
+    static async Task RefreshSourceCacheAsync(string sourceUrl)
+    {
+        try
+        {
+            var hasManifest = HasSuffix(sourceUrl, ".js.md5");
+            var jsUrl = hasManifest ? ReplaceSuffix(sourceUrl, ".js.md5", ".js") : sourceUrl;
+            var sourceDir = Path.Combine(AppPaths.Node, "source-" + SourceKey(jsUrl));
+            Directory.CreateDirectory(sourceDir);
+            var scriptPath = Path.Combine(sourceDir, "index.js");
+            var scriptMd5 = hasManifest ? await ReadMd5Async(sourceUrl, "订阅校验文件") : null;
+            await ReadFileAsync(jsUrl, scriptPath, scriptMd5, "订阅脚本");
+            await LoadCompanionConfigAsync(jsUrl, sourceDir);
+        }
+        catch (Exception error)
+        {
+            Logger.E(Tag, "后台校验 CatPawOpen 源失败：" + error.Message);
+        }
+    }
 
     /// <summary>
     /// Loads a CatPawOpen companion config through the same verified on-disk cache

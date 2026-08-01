@@ -52,6 +52,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     bool _fullscreen, _compact;
     bool _closed;                                  // 已离开页面，晚到事件全部忽略
     bool _pauseWhenOpened;                         // 隐藏期间晚到的解析结果起播后立即暂停
+    bool _isBuffering;
     int _menuOpen;                                 // 打开中的 Flyout 数（暂停自动隐藏）
     int _playGeneration;                           // 只允许最新一次解析结果提交给播放器
     bool _sourceTransitionInProgress;              // 防止 Flyleaf OpenAsync 重叠换源
@@ -124,6 +125,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     {
         base.OnNavigatedFrom(e);
         _closed = true;
+        _isBuffering = false;
+        HideLoading();
         _selectionMutationVersion++;
         CloseSelectionPanel(false);
         InvalidateSubtitleLoad();
@@ -153,6 +156,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             _core.Errored -= OnCoreErrored;
             _core.Ended -= OnCoreEnded;
             _core.TimeChanged -= OnCoreTime;
+            _core.TransferRateChanged -= OnCoreTransferRateChanged;
+            _core.BufferingChanged -= OnCoreBufferingChanged;
             _core.SubtitleOpened -= OnSubtitleOpened;
             try { _core.Stop(); _core.Dispose(); } catch { }
             _core = null;
@@ -206,6 +211,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             _core.Errored += OnCoreErrored;
             _core.Ended += OnCoreEnded;
             _core.TimeChanged += OnCoreTime;
+            _core.TransferRateChanged += OnCoreTransferRateChanged;
+            _core.BufferingChanged += OnCoreBufferingChanged;
             _core.SubtitleOpened += OnSubtitleOpened;
         }
         catch (Exception ex)
@@ -244,6 +251,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     {
         var ep = _session.CurrentEpisode;
         if (ep == null || _core == null) return;
+        _isBuffering = false;
         SetSourceTransition(true);
         CancelPendingSeek();
         InvalidateSubtitleLoad();
@@ -253,7 +261,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
         var ct = cts.Token;
         UpdateEpisodeUi();
         ErrorBar.IsOpen = false;
-        ShowLoading("解析中…");
+        ShowLoading("解析中…", false);
         try
         {
             var item = await PlayResolver.Resolve(_session.Site, _session.CurrentFlag?.Flag, ep, ct);
@@ -264,7 +272,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             else if (Setting.GetBool("skip_start_end") && _session.History is { Opening: > 0 } his)
                 start = Math.Max(start, his.Opening);
             item.StartPositionMs = start;
-            StatusText.Text = "起播中…";
+            ShowLoading("起播中…", true);
             _core.Open(item);
             RefreshDanmakuSources(item);
             RefreshSubMenu(item);
@@ -315,6 +323,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnCoreOpened()
     {
         if (_closed) return;
+        _isBuffering = false;
         HideLoading();
         _triedFlags.Clear();
         SetSourceTransition(false);
@@ -333,6 +342,20 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
             return;
         }
         OnPlayError(msg);
+    }
+
+    void OnCoreTransferRateChanged(double bytesPerSecond)
+    {
+        if (_closed || LoadingSpeedPanel.Visibility != Visibility.Visible) return;
+        LoadingSpeedText.Text = PlayerCore.FormatTransferRate(bytesPerSecond);
+    }
+
+    void OnCoreBufferingChanged(bool buffering)
+    {
+        if (_closed || _sourceTransitionInProgress) return;
+        _isBuffering = buffering;
+        if (buffering) ShowLoading("缓冲中…", true);
+        else HideLoading();
     }
 
     /// <summary>自然播完：自动下一集；没有下一集则返回。</summary>
@@ -356,6 +379,7 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     /// <summary>播放/解析失败 → 自动换源：先在其他线路找同名集，全部试过仍失败才报错手动选。</summary>
     void OnPlayError(string msg)
     {
+        _isBuffering = false;
         HideLoading();
         Logger.E(TAG, "播放失败: " + msg);
         var retryKey = _session.FlagIndex + ":" + _session.EpisodeIndex;
@@ -415,7 +439,8 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
     void OnCoreTime(long ms)
     {
         if (_closed || _core == null) return;
-        if (LoadingOverlay.Visibility == Visibility.Visible) HideLoading();
+        if (!_isBuffering && !_sourceTransitionInProgress && LoadingOverlay.Visibility == Visibility.Visible)
+            HideLoading();
         long dur = _core.DurationMs;
         long displayMs = ms;
         if (_pendingSeekMs is long pending)
@@ -1663,13 +1688,19 @@ public sealed partial class PlayerPage : Page, INavigationPlayback
 
     // ---------- 提示与状态 ----------
 
-    void ShowLoading(string status)
+    void ShowLoading(string status, bool showSpeed)
     {
         StatusText.Text = status ?? "";
+        LoadingSpeedPanel.Visibility = showSpeed ? Visibility.Visible : Visibility.Collapsed;
+        if (showSpeed) LoadingSpeedText.Text = PlayerCore.FormatTransferRate(0);
         LoadingOverlay.Visibility = Visibility.Visible;
     }
 
-    void HideLoading() => LoadingOverlay.Visibility = Visibility.Collapsed;
+    void HideLoading()
+    {
+        LoadingSpeedPanel.Visibility = Visibility.Collapsed;
+        LoadingOverlay.Visibility = Visibility.Collapsed;
+    }
 
     void ShowToast(string msg)
     {
